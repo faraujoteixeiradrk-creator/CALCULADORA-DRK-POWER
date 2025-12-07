@@ -1543,7 +1543,22 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 
                 <!-- SECCIÓN DE CARGA Y FILTROS -->
                 ${!hasData ? `<div class="relative group"><input type="file" accept=".xlsx,.csv" onchange="handleExcelUpload(event)" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"><button class="w-full bg-orange-600 text-white py-2 rounded font-bold flex justify-center gap-2">${state.isScanning?renderIcon('loader','animate-spin'):renderIcon('upload','')} ${calculateButtonText}</button></div>` : 
-                `<div class="grid md:grid-cols-4 gap-4 items-end">
+                `
+                <!-- BOTONES DE CARGA Y BORRADO (MOVIDOS ARRIBA) -->
+                <div class="mb-4 pt-4 border-t border-slate-200 grid grid-cols-2 gap-4"> 
+                     <div class="relative group">
+                        <input type="file" accept=".xlsx,.csv" onchange="handleExcelUpload(event)" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+                        <button class="w-full bg-slate-200 text-slate-800 py-2 rounded font-bold flex justify-center gap-2 hover:bg-slate-300">
+                            ${renderIcon('upload','w-5 h-5')} SUBIR Y REEMPLAZAR TARIFAS (Excel)
+                        </button>
+                    </div>
+                     <button onclick="deleteTariffsFromStorage()" class="w-full bg-red-500 text-white py-2 rounded font-bold flex justify-center gap-2 hover:bg-red-600 ${!hasData ? 'opacity-50 cursor-not-allowed' : ''}" ${!hasData ? 'disabled' : ''}>
+                        ${renderIcon('trash-2','w-5 h-5')} BORRAR TARIFAS GUARDADAS
+                    </button>
+                </div>
+                
+                <!-- SECCIÓN DE FILTROS Y CALCULAR (Mantenida) -->
+                <div class="grid md:grid-cols-4 gap-4 items-end">
                     ${isMultiCups ? 
                         `
                             <div class="col-span-2">
@@ -1578,17 +1593,6 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                             </button>
                         `
                     }
-                </div>
-                <div class="mt-4 border-t pt-4 grid grid-cols-2 gap-4">
-                     <div class="relative group">
-                        <input type="file" accept=".xlsx,.csv" onchange="handleExcelUpload(event)" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
-                        <button class="w-full bg-slate-200 text-slate-800 py-2 rounded font-bold flex justify-center gap-2 hover:bg-slate-300">
-                            ${renderIcon('upload','w-5 h-5')} SUBIR Y REEMPLAZAR TARIFAS (Excel)
-                        </button>
-                    </div>
-                     <button onclick="deleteTariffsFromStorage()" class="w-full bg-red-500 text-white py-2 rounded font-bold flex justify-center gap-2 hover:bg-red-600 ${!hasData ? 'opacity-50 cursor-not-allowed' : ''}" ${!hasData ? 'disabled' : ''}>
-                        ${renderIcon('trash-2','w-5 h-5')} BORRAR TARIFAS GUARDADAS
-                    </button>
                 </div>
                 `}
                 
