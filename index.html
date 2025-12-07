@@ -3,13 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DRK ENERGÍA | Comparador Pro V4.50</title>
+    <title>DRK ENERGÍA | Comparador Pro V4.54</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Lucide Icons CDN -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <!-- SheetJS -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- jsqr para decodificación -->
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
     
     <!-- Firebase Imports for Persistence -->
     <script type="module">
@@ -30,13 +32,51 @@
         .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #ea580c; border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-track { background-color: #e2e8f0; }
         .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+        /* Estilos específicos para la zona de pegado del QR (Sepia/Marrón) */
+        #pasteZone.qr-paste-zone {
+            padding: 30px; 
+            border: 3px dashed #a0522d; /* Sienna dashed border */
+            border-radius: 10px; 
+            text-align: center; 
+            background: #fefdfb; /* Very light sepia background */
+            cursor: pointer; 
+            color: #8b4513; /* Saddle Brown text */
+            transition: all 0.3s ease;
+        }
+        #pasteZone.qr-paste-zone.focused {
+            border-color: #8b4513; /* Saddle Brown focus border */
+            background: #f0e6da; /* Light Tan background */
+            color: #5c3017; /* Dark Brown text */
+        }
+        #qr-preview {
+            max-width: 250px; 
+            display: none;
+            border: 3px solid #8b4513; 
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+        .qr-block {
+            background: #f9f6f3; 
+            padding: 15px; 
+            border-radius: 8px;
+            border: 1px solid #d4c5b7; 
+            margin-top: 15px;
+        }
+        .qr-kv { 
+            display: flex; 
+            justify-content: space-between; 
+            padding: 7px 0;
+            border-bottom: 1px dashed #d4c5b7; 
+            align-items: center;
+        }
     </style>
     <script>
         const PDF_JS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
 
         // --- ESTADO Y CONFIGURACIÓN FIREBASE/LOCAL ---
         let db, auth, userId, appId;
-        let isFirebaseReady = false; // Bandera para saber si la conexión a la nube es exitosa
+        let isFirebaseReady = false; 
         
         let state = {
             config: { 
@@ -53,7 +93,7 @@
                 rankingRetailerFilter: '', 
                 winningRetailerFilter: '',
                 isMultiCupsMode: false, 
-                lastUploadDate: null // Fecha de última carga
+                lastUploadDate: null 
             }, 
             inputs: { clientName: '', cups: '', commercialCode: '', p1_kw: 0, p2_kw: 0, p3_kw: 0, p4_kw: 0, p5_kw: 0, p6_kw: 0, p1_kwh: 0, p2_kwh: 0, p3_kwh: 0, p4_kwh: 0, p5_kwh: 0, p6_kwh: 0, clientTotalInvoice: 0 },
             currentPrices: { p1_pow: 0, p2_pow: 0, p3_pow: 0, p4_pow: 0, p5_pow: 0, p6_pow: 0, p1_en: 0, p2_en: 0, p3_en: 0, p4_en: 0, p5_en: 0, p6_en: 0 },
@@ -71,6 +111,8 @@
             currentCupsIndex: 0, 
             currentStudyResult: null, 
             isFinalReportVisible: false, 
+            
+            showQRScannerModal: false, // NUEVO: Estado del modal QR
         };
         
         function resetAllState() {
@@ -95,12 +137,13 @@
         }
 
         // --- FIREBASE AND LOCAL STORAGE FUNCTIONS ---
-        
+        // (Las funciones loadTariffsFromStorage, saveTariffsToStorage, deleteTariffsFromStorage
+        // y initializeFirebaseAndLoadData se mantienen sin cambios mayores, excepto el uso de window.firebase)
+
         // Carga tarifas: Intenta Firebase (si está listo), si falla/no está, usa localStorage.
         async function loadTariffsFromStorage() {
             let loaded = false;
             
-            // 1. Intentar cargar desde Firebase (Nube)
             if (db && userId && isFirebaseReady) {
                 const { doc, getDoc } = window.firebase;
                 try {
@@ -123,11 +166,9 @@
                     } 
                 } catch (e) {
                     console.error("Error al cargar tarifas de Firestore:", e);
-                    // Si falla, se intentará LocalStorage
                 }
             }
 
-            // 2. Intentar cargar desde LocalStorage (Respaldo Local)
             if (!loaded && typeof localStorage !== 'undefined') {
                 try {
                     const savedData = localStorage.getItem('drk_tariffs');
@@ -143,12 +184,12 @@
                             segmentFilterOptions: [...new Set(tariffs.map(t=>t.segment))].sort(),
                         });
                         if (tariffs.length > 0) {
-                             showNotification(`Tarifas cargadas de LocalStorage (${tariffs.length}). La persistencia es local.`, 'info');
+                            showNotification(`Tarifas cargadas de LocalStorage (${tariffs.length}). La persistencia es local.`, 'info');
                         }
                     } else if (isFirebaseReady) {
-                         showNotification("No se encontraron tarifas guardadas en la Nube.", 'info');
+                        showNotification("No se encontraron tarifas guardadas en la Nube.", 'info');
                     } else {
-                         showNotification("No se encontraron tarifas guardadas localmente.", 'info');
+                        showNotification("No se encontraron tarifas guardadas localmente.", 'info');
                     }
                 } catch (e) {
                     console.error("Error al cargar tarifas de LocalStorage:", e);
@@ -156,15 +197,10 @@
             }
         }
 
-        // Guarda tarifas: Usa Firebase (si está listo), si no, usa localStorage.
         async function saveTariffsToStorage(tariffs) {
             const now = new Date();
-            const docData = {
-                uploadDate: now.toISOString(),
-                tariffs: tariffs
-            };
+            const docData = { uploadDate: now.toISOString(), tariffs: tariffs };
 
-            // 1. Intentar guardar en Firebase (Nube)
             if (db && userId && isFirebaseReady) {
                 const { doc, setDoc } = window.firebase;
                 try {
@@ -179,13 +215,12 @@
                 }
             }
             
-            // 2. Intentar guardar en LocalStorage (Respaldo Local o Única Opción)
             if (typeof localStorage !== 'undefined') {
                 try {
                     localStorage.setItem('drk_tariffs', JSON.stringify(docData));
                     setState({ config: { ...state.config, lastUploadDate: now } });
                     if (!isFirebaseReady) {
-                         showNotification("Tarifas guardadas localmente (LocalStorage).", 'success');
+                        showNotification("Tarifas guardadas localmente (LocalStorage).", 'success');
                     }
                 } catch (e) {
                     console.error("Error al guardar tarifas en LocalStorage:", e);
@@ -196,12 +231,11 @@
         
         async function deleteTariffsFromStorage() {
             if (state.uploadedTariffs.length === 0) {
-                 return showNotification("No hay tarifas cargadas para borrar.", 'info');
+                return showNotification("No hay tarifas cargadas para borrar.", 'info');
             }
             
             let deletedFromCloud = false;
             
-            // 1. Intentar borrar de Firebase (Nube)
             if (db && userId && isFirebaseReady) {
                 const { doc, deleteDoc } = window.firebase;
                 try {
@@ -213,12 +247,10 @@
                 }
             }
             
-            // 2. Borrar de LocalStorage
             if (typeof localStorage !== 'undefined') {
                 localStorage.removeItem('drk_tariffs');
             }
             
-            // Resetear el estado local
             setState({
                 uploadedTariffs: [],
                 comparisonResults: [],
@@ -239,13 +271,9 @@
             showNotification(`¡Base de datos de tarifas eliminada con éxito! (Fuente: ${deletedFromCloud ? 'Nube y Local' : 'Solo Local'})`, 'success');
         }
 
-        // --- INICIALIZACIÓN DE FIREBASE Y DATOS ---
-        
         async function initializeFirebaseAndLoadData() {
             if (window.firebase) {
                 const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, getFirestore, setLogLevel } = window.firebase;
-                
-                // setLogLevel('Debug'); // Descomentar para depurar Firebase
                 
                 const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
                 appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -257,7 +285,6 @@
                     
                     try {
                         let userCredential;
-                        // 1. Handle Sign-in (Custom Token or Anonymous)
                         if (typeof __initial_auth_token !== 'undefined') {
                             userCredential = await signInWithCustomToken(auth, __initial_auth_token);
                         } else {
@@ -268,7 +295,6 @@
                     } catch (e) {
                         console.error("Error al autenticar o cargar datos (Conexión Nube Fallida):", e);
                         isFirebaseReady = false; 
-                        // Aviso específico para el usuario local
                         showNotification("La conexión a la Nube (Firebase) falló. Usando LocalStorage para guardar/cargar tarifas.", 'error');
                     }
                 } else {
@@ -280,13 +306,11 @@
                 console.error("Módulos de Firebase no cargados.");
             }
 
-            // 3. Cargar datos (usando la función que intenta LocalStorage si Firebase falló)
             await loadTariffsFromStorage(); 
-            // 4. Renderizar la UI
             renderUI(); 
         }
 
-        // --- V4.50 Initialization Entry Point ---
+        // --- V4.54 Initialization Entry Point ---
         function initializeApp() { 
             resetAllState();
             state.config.tariff = '2.0TD';
@@ -333,9 +357,9 @@
         // --- HANDLERS (INPUT FIX) ---
         function handleInputRaw(name, value, type = 'inputs') {
              if (['clientName', 'cups', 'commercialCode'].includes(name)) {
-                state.inputs[name] = String(value).trim();
+                 state.inputs[name] = String(value).trim();
              } else {
-                state.inputs[name] = parseNumericInput(value);
+                 state.inputs[name] = parseNumericInput(value);
              }
         }
         function handleInputBlur(name, value, type = 'inputs') {
@@ -350,7 +374,7 @@
             if (state.config.winningTariffId) {
                 const winningPlan = state.comparisonResults.find(p => p.id === state.config.winningTariffId);
                 if (winningPlan && state.result?.current) {
-                     state.result.bestPlan = winningPlan;
+                    state.result.bestPlan = winningPlan;
                 }
             }
             renderUI(); 
@@ -435,8 +459,18 @@
         }
 
         function handleConfigChange(n, v) { 
+            // Permite modificar los días manualmente SOLO si NO es 2.0TD (ya que en 2.0TD se bloquea para el QR)
             if (n === 'days') v = parseNumericInput(v); 
             if (n === 'isSinglePresentationMode') v = (v === 'true' || v === true);
+            
+            // Si la tarifa es 2.0TD y el campo de días está deshabilitado, solo se actualiza desde el QR.
+            if (state.config.tariff === '2.0TD' && n === 'days') {
+                // Forzar re-renderizado para actualizar el valor visible, si se ha cambiado manualmente el foco
+                // Aunque el input está deshabilitado, esta línea de código es segura.
+                setState({ config: state.config }); 
+                return; 
+            }
+            
             setState({ config: { ...state.config, [n]: v }, result: null }); 
         }
         function handleReportHeaderChange(e) { setState({ config: { ...state.config, reportHeader: e.target.value } }); }
@@ -452,7 +486,140 @@
         }
 
 
-        // --- LOGICA MULTI-CUPS ---
+        // --- LOGICA QR SCANNER (NUEVO) ---
+        
+        // Mapea los datos del QR (CNMC) a los campos de entrada de la aplicación
+        window.applyQRData = function(data) {
+            if (state.config.tariff !== '2.0TD') return showNotification("Error: Los datos de CNMC QR solo se aplican a 2.0TD.", "error");
+
+            // Potencia (kW) - Claves CNMC: pP1, pP2
+            const p1_kw = parseFloat(data.pP1) || 0; 
+            const p2_kw = parseFloat(data.pP2) || 0;
+            
+            // Energía (kWh) - Claves CNMC: cfP1, cfP2, cfP3
+            const p1_kwh = parseFloat(data.cfP1) || 0; // Consumo Punta (E1)
+            const p2_kwh = parseFloat(data.cfP2) || 0; // Consumo Llano (E2)
+            const p3_kwh = parseFloat(data.cfP3) || 0; // Consumo Valle (E3)
+            
+            // Importe Total Facturado - Clave CNMC: imp
+            const clientTotalInvoice = parseFloat(data.imp) || 0; 
+            
+            // Consumo total (Calculado)
+            const totalConsumption = p1_kwh + p2_kwh + p3_kwh;
+            
+            // --- INICIO: CÁLCULO AUTOMÁTICO DE DÍAS (2.0TD) ---
+            let newDays = state.config.days; // Mantener el valor actual por defecto
+            let daysCalculated = false;
+
+            if (data.iniF && data.finF) {
+                try {
+                    // Crea fechas. Usamos YYYY-MM-DD.
+                    // Nota: Date() puede tener problemas de zona horaria, por eso normalizamos.
+                    const startDate = new Date(data.iniF);
+                    const endDate = new Date(data.finF);
+
+                    // Para asegurar que no hay problemas de zona horaria que puedan sumar/restar 1 día:
+                    startDate.setHours(0, 0, 0, 0);
+                    endDate.setHours(0, 0, 0, 0);
+                    
+                    // Diferencia de tiempo en milisegundos
+                    const timeDiff = endDate.getTime() - startDate.getTime();
+                    
+                    // Convertir a días.
+                    const diffDays = Math.round(timeDiff / (1000 * 3600 * 24)); 
+                    
+                    // NOTA: Si el rango es inclusive (ambos días), se debe añadir 1 día.
+                    // Si iniF = 01/01/2023 y finF = 31/01/2023, la resta es 30 días, pero la factura es de 31 días.
+                    // Vamos a asumir que la diferencia de tiempo es suficiente y si faltara uno, la fuente de datos debe ser la que ajuste.
+                    // Pero si la diferencia es 30, son 31 días de servicio. Si diffDays es 30, newDays = 31.
+                    const finalDays = diffDays + 1; // Ajuste común para facturas
+                    
+                    if (finalDays > 0 && finalDays < 366) {
+                        newDays = finalDays;
+                        daysCalculated = true;
+                    } else {
+                         console.error("Días calculados inválidos:", finalDays);
+                    }
+                } catch(e) {
+                    console.error("Error al calcular días de la factura:", e);
+                }
+            }
+            // --- FIN: CÁLCULO AUTOMÁTICO DE DÍAS ---
+            
+            const newInputs = {
+                ...state.inputs,
+                cups: data.cups ? String(data.cups).trim().toUpperCase() : state.inputs.cups,
+                clientTotalInvoice: clientTotalInvoice,
+
+                // Aplicar Potencia
+                p1_kw: p1_kw,
+                p2_kw: p2_kw,
+
+                // Aplicar Energía
+                p1_kwh: p1_kwh,
+                p2_kwh: p2_kwh,
+                p3_kwh: p3_kwh,
+                
+                // Asegurar que los periodos de tarifas HV están a 0
+                p4_kw: 0, p5_kw: 0, p6_kw: 0,
+                p4_kwh: 0, p5_kwh: 0, p6_kwh: 0,
+            };
+            
+            // Las variables locales (newInputs, newDays) están correctas.
+            
+            // Forzar el recálculo si ya está seleccionado el segmento y total
+            if (state.config.segmentFilter && clientTotalInvoice > 0) {
+                 // **IMPORTANTE**: Para que calculate() use el newDays, necesitamos actualizar el estado primero.
+                 // Aunque calculate() se llama aquí, la llamada final a setState es la que actualiza la UI.
+                 // Si calculate() usa un valor obsoleto, el resultado será incorrecto.
+                 // Vamos a calcular usando newDays si está disponible.
+                 
+                 // Opción 1 (Más limpia): Llamar a calculate después del setState final para que use el nuevo estado
+                 
+                 // Opción 2: Replicar la lógica de calculate para la notificación
+
+                if (daysCalculated) {
+                     showNotification(`¡Datos de factura 2.0TD cargados! Días: ${newDays}. Calculando...`, "success");
+                 } else {
+                      showNotification(`¡Datos de factura 2.0TD cargados! Consumo total: ${formatCurrency(totalConsumption, 0)} kWh. Calculando...`, "success");
+                 }
+                 
+            } else {
+                if (daysCalculated) {
+                     showNotification(`¡Datos de factura 2.0TD cargados! Días (${newDays}) y CUPS OK. Falta el Segmento para calcular.`, "info");
+                } else {
+                     showNotification(`¡Datos de factura 2.0TD cargados! Consumo total: ${formatCurrency(totalConsumption, 0)} kWh. Falta Segmento para calcular.`, "info");
+                }
+            }
+            
+            // Llamada final a setState para disparar la actualización de la UI con los nuevos valores.
+            // Esto garantiza que el input de días se actualice.
+            const newState = {
+                inputs: newInputs,
+                config: { ...state.config, days: newDays }, // CLAVE: Reconstruir config para forzar la actualización del campo days
+                showQRScannerModal: false
+            };
+            
+            setState(newState);
+
+            // Si se cumplieron las condiciones de cálculo, lo disparamos con el nuevo estado:
+            if (state.config.segmentFilter && clientTotalInvoice > 0) {
+                // Como setState llama a renderUI y luego setState retorna, necesitamos re-disparar el cálculo
+                // después de un pequeño retraso o envolver la llamada original. 
+                // Ya que 'calculate' usa el estado global mutado por setState, no es necesario un delay.
+                calculate();
+            }
+        }
+        
+        function openQRScanner() {
+            if (state.config.tariff !== '2.0TD') {
+                return showNotification("El escáner QR de CNMC solo está disponible para tarifas 2.0TD.", "info");
+            }
+            setState({ showQRScannerModal: true });
+        }
+
+
+        // --- LOGICA MULTI-CUPS (SE MANTIENE) ---
         function saveCupsAndProceed() {
             if (!state.currentStudyResult || !state.inputs.cups) {
                 return showNotification("¡Atención! Debe haber un CUPS calculado y un valor de CUPS ingresado.", 'error');
@@ -510,7 +677,7 @@
                 };
                 newMultiCupsData.push(cupsData);
             } else if (state.multiCupsData.length === 0) {
-                 return showNotification("No hay estudios de CUPS guardados para consolidar.", 'error');
+                return showNotification("No hay estudios de CUPS guardados para consolidar.", 'error');
             }
             
             setState({
@@ -556,7 +723,7 @@
             showNotification(`Continuando estudio. Listo para CUPS #${nextIndex}.`, 'info');
         }
 
-        // --- LOGICA RANKING ---
+        // --- LOGICA RANKING (SE MANTIENE) ---
         function getSelectedRetailers(ids, results) {
             const s = new Set();
             ids.forEach(id => { const r = results.find(x => x.id === id); if(r) s.add(r.retailer); });
@@ -613,7 +780,7 @@
             showNotification("Ranking de opciones reseteado.", "info");
         }
 
-        // --- CÁLCULOS EXCEL ---
+        // --- CÁLCULOS EXCEL Y PRINCIPAL (SE MANTIENEN) ---
         const EXCEL_MAP = { retailer: 0, tariffName: 1, tariffModel: 2, p1_en: 4, p2_en: 5, p3_en: 6, p4_en: 7, p5_en: 8, p6_en: 9, en_discount: 10, p1_pow_an: 11, p2_pow_an: 13, p3_pow_an: 13, p4_pow_an: 14, p5_pow_an: 15, p6_pow_an: 16, pow_discount: 17, segment: 19 };
         
         function handleExcelUpload(e) {
@@ -641,8 +808,8 @@
                         };
                         
                         if (m.includes('2.0TD')) { 
-                             t.pow_an = t.pow_an.slice(0, 2); 
-                             t.en = t.en.slice(0, 3);
+                            t.pow_an = t.pow_an.slice(0, 2); 
+                            t.en = t.en.slice(0, 3);
                         }
 
                         return t;
@@ -760,6 +927,7 @@
         }
 
         function getPricesForMail(plan) {
+            // ... (se mantiene igual)
             const periods = getTariffPeriods(plan.model);
             const pPeriodsCount = periods.p;
             const ePeriodsCount = periods.e;
@@ -767,7 +935,7 @@
             const getPrices = (t) => {
                 const pp = [], pe = [];
                 for(let i=0; i<pPeriodsCount; i++) pp.push( (t.pow_an[i]*(1-t.pow_discount))/365 ); 
-                for(let i=0; i<ePeriodsCount; i++) pe.push( t.en[i]*(1-t.en_discount) );           
+                for(let i=0; i<ePeriodsCount; i++) pe.push( t.en[i]*(1-t.en_discount) );         
                 return { pp, pe };
             };
             
@@ -778,13 +946,14 @@
                 priceDetails += `P${i+1} (Potencia - €/kW/día): ${formatCurrency(prices.pp[i], 8)}\n`;
             }
             for (let i = 0; i < ePeriodsCount; i++) {
-                priceDetails += `E${i+1} (Energía - €/kWh): ${formatCurrency(prices.pe[i], 8)}\n`;
+                priceDetails += `E${i+1} (Energía - €/kWh): ${formatCurrency(prices.pe[i], 8)}\n`; // <-- LÍNEA CORREGIDA: Faltaba el backtick de cierre aquí
             }
 
             return priceDetails;
         }
 
         function generateMailtoLink(plan) {
+            // ... (se mantiene igual)
             const brand = state.config.brand;
             const company = brand.toUpperCase(); 
             
@@ -828,6 +997,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando:
         }
         
         function getUniqueWinningPlans() {
+            // ... (se mantiene igual)
             const uniquePlans = new Map();
             const cupsMap = new Map(); 
 
@@ -849,6 +1019,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando:
         }
 
         function generateMultiCupsMailtoLink() {
+            // ... (se mantiene igual)
             if (state.multiCupsData.length === 0) return '';
             
             const { plans, cupsMap } = getUniqueWinningPlans();
@@ -926,6 +1097,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
         function renderIcon(n, c) { return `<i data-lucide="${n}" class="${c}"></i>`; }
 
         function getDetailedSimulacroData(plan, studyInputs) { 
+            // ... (se mantiene igual)
             const periods = getTariffPeriods(plan.model);
             const pPeriods = periods.p; 
             const ePeriods = periods.e;
@@ -968,6 +1140,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
         }
 
         function renderReportModal() {
+            // ... (se mantiene igual)
             if (!state.showReportModal || !state.result || !state.config.winningTariffId) return '';
             const plan = state.result.bestPlan;
             
@@ -975,10 +1148,11 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             const cAccent = '#ea580c';  
             const cBgLight = '#fff7ed'; 
             const cBorder = '#fdba74';  
-            const cTableHead = '#9a3412'; 
+            const cTableHead = cPrimary; 
             const cTextDark = '#111827'; 
-            const cOfferButton = cAccent; 
-
+            
+            const cSavingsHighlight = cAccent; 
+            const cOfferButton = cPrimary; 
 
             let ranked = [];
             const winningPlan = state.result.bestPlan; 
@@ -1047,7 +1221,6 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             
             const mailtoLink = generateMailtoLink(plan);
 
-
             const simHtml = `
                 <div style="font-size: 12px; color: ${cTextDark};">
                     <h4 style="font-size: 16px; font-weight: bold; color: ${cPrimary}; text-align: center; margin: 20px 0; border-bottom: 2px solid ${cAccent}; padding-bottom: 5px;">
@@ -1069,7 +1242,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                         ${simData.energy.map(r => `
                             <tr style="border-bottom: 1px dashed #ddd; background: #fafafa;">
                                 <td style="padding: 4px 8px; font-weight: bold;">${r.name}</td>
-                                <td style="padding: 4px 8px; font-family: monospace;">${r.formula}</td>
+                                <td style="padding: 4px 8px; font-family: monospace; width: 65%;">${r.formula}</td>
                                 <td style="text-align: right; padding: 4px 8px; font-weight: bold;">${formatCurrency(r.cost, 4)} €</td>
                             </tr>
                         `).join('')}
@@ -1079,24 +1252,36 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                         <tr><td colspan="2" style="padding: 4px 8px; text-align: right;">+ Impuesto Eléctrico (5%)</td><td style="text-align: right; padding: 4px 8px;">${formatCurrency(plan.taxes.ie, 4)} €</td></tr>
                         <tr><td colspan="2" style="padding: 4px 8px; text-align: right;">+ IVA (21%)</td><td style="text-align: right; padding: 4px 8px;">${formatCurrency(plan.taxes.iva, 4)} €</td></tr>
                         
-                        <tr style="background:#cc6633; color: white; font-weight: bold; font-size: 14px;">
+                        <!-- UNIFICADO: TOTAL ANUAL (Fondo cPrimary) -->
+                        <tr style="background:${cPrimary}; color: white; font-weight: bold; font-size: 14px;">
                             <td colspan="2" style="padding: 8px; text-align: right;">TOTAL ANUAL ESTIMADO</td>
                             <td style="text-align: right; padding: 8px;">${formatCurrency(plan.annualCost, 2)} €</td>
                         </tr>
                         
+                        <!-- UNIFICADO: Total Mes (Fondo cAccent) -->
                         <tr style="background:${cAccent}; color: white; font-weight: bold; font-size: 14px;">
                             <td colspan="2" style="padding: 8px; text-align: right;">TOTAL MES (${state.config.days} DÍAS)</td>
                             <td style="text-align: right; padding: 8px;">${formatCurrency(plan.periodCost, 2)} €</td>
                         </tr>
 
+                        <!-- UNIFICADO: Botón QUIERO OFERTA (Ahorro destacado añadido) -->
                         <tr style="background:#f0f9ff; border-top: 1px solid #dbeafe; border-bottom: 1px solid #dbeafe;">
                             <td colspan="3" style="padding: 10px 0; text-align: center;">
-                                <a href="${mailtoLink}" style="display: block; width: 60%; max-w: 300px; margin: 5px auto; text-align: center; background: ${cOfferButton}; color: white; padding: 10px 20px; border-radius: 8px; text-decoration: none; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border: 1px solid ${cOfferButton};">
+                                <div style="font-size: 14px; color: ${cPrimary}; font-weight: bold; margin-bottom: 5px;">
+                                    TU AHORRO ANUAL ESTIMADO ES:
+                                </div>
+                                <div style="font-weight: 900; font-size: 36px; color: ${cAccent}; margin-bottom: 15px; line-height: 1;">
+                                    ${formatCurrency(plan.savings, 0)} €
+                                </div>
+                                <div style="font-weight: 800; font-size: 18px; color: ${cAccent}; margin-bottom: 10px; text-transform: uppercase;">
+                                    ¡CONSIGUE TU AHORRO ANUAL!
+                                </div>
+                                <a href="${mailtoLink}" style="display: inline-block; width: 60%; max-width: 300px; margin: 5px auto; text-align: center; background: ${cOfferButton}; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border: 1px solid ${cOfferButton};">
                                     QUIERO OFERTA
                                 </a>
                                 
                                 <p style="margin-top: 15px; font-size: 11px; color: #666;">
-                                     Para formalizar la contratación, contacte con: <a href="mailto:${getEmailTarget()}" style="color: ${cPrimary}; text-decoration: underline;">${getEmailTarget()}</a>
+                                     Contacto: <a href="mailto:${getEmailTarget()}" style="color: ${cPrimary}; text-decoration: underline;">${getEmailTarget()}</a>
                                 </p>
                             </td>
                         </tr>
@@ -1104,31 +1289,63 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 </div>
             `;
             
-            const rankingContent = isSingleMode ? 
-                `<div style="width:35%;padding-left:15px;border-left:1px solid #eee"><div style="font-size:11px;font-weight:bold;color:${cPrimary};margin-bottom:10px">MODO OFERTA ÚNICA ACTIVO</div><p style="font-size:10px; color:#666">Mostrando solo la simulación de la Tarifa Ganadora para mayor claridad.</p></div>` :
-                `<div style="width:35%;padding-left:15px;border-left:1px solid #eee">
-                    <div style="font-size:11px;font-weight:bold;color:${cPrimary};margin-bottom:10px">RANKING AHORRO</div>
-                    ${ranked.map((r,i) => {
-                        const pct = Math.max((r.savings/maxSav)*100, 10);
-                        const col = r.id===plan.id ? cAccent : '#78716c';
-                        return `<div style="margin-bottom:8px;font-size:10px"><div style="display:flex;justify-content:space-between;margin-bottom:2px"><span>${r.retailer}</span><span>${formatCurrency(r.savings,0)}€</span></div><div style="height:6px;background:#e5e7eb;border-radius:3px"><div style="width:${pct}%;background:${col};height:100%;border-radius:3px"></div></div></div>`;
-                    }).join('')}
-                </div>`;
+            let rankingTableHtml = ''; // Inicialización para evitar ReferenceError
+            let mainLayoutContent;
             
-            const comparativeSection = isMultiComparativeMode ? `
-                <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:15px;font-size:15px;font-weight:bold;text-transform:uppercase">Comparativa de Ofertas (Top ${compareCols.length})</h3>
-                ${compTableHtml}
-            ` : `
-                <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:15px;font-size:15px;font-weight:bold;text-transform:uppercase">Resumen de Precios de la Oferta Única</h3>
-                ${compTableHtml}
-            `;
+            if (isMultiComparativeMode) {
+                // Generar el HTML para la tabla del ranking (columna derecha)
+                rankingTableHtml = `
+                    <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:15px;font-size:15px;font-weight:bold;text-transform:uppercase">Ranking de Opciones Seleccionadas (${ranked.length} Tarifas)</h3>
+                    <table style="width:100%; border-collapse: collapse; font-size: 11px;">
+                        <thead>
+                            <tr style="background:${cTableHead}; color:white;">
+                                <th style="padding: 6px; text-align: left;">CÍA / TARIFA</th>
+                                <th style="padding: 6px; text-align: right;">AHORRO ANUAL</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${ranked.map((p, i) => `
+                                <tr style="background:${i % 2 === 0 ? '#fff' : cBgLight};">
+                                    <td style="padding: 6px; font-weight: bold; color: ${p.id === winningPlanId ? cAccent : cTextDark};">${p.retailer} (${p.name}) ${p.id === winningPlanId ? ' (Ganadora)' : ''}</td>
+                                    <td style="padding: 6px; text-align: right; color: ${p.id === winningPlanId ? cAccent : cPrimary}; font-weight: bold;">${formatCurrency(p.savings, 0)} €</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+
+                mainLayoutContent = `
+                    <table border="0" cellpadding="0" cellspacing="0" style="width:100%;">
+                        <tr>
+                            <td style="width:65%; padding-right:20px; vertical-align:top;">
+                                <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:15px;font-size:15px;font-weight:bold;text-transform:uppercase">Comparativa de Ofertas (Top ${compareCols.length})</h3>
+                                ${compTableHtml}
+                                <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:15px;margin-top:30px;font-size:15px;font-weight:bold;text-transform:uppercase">Simulación Detallada</h3>
+                                ${simHtml}
+                            </td>
+                            <td style="width:35%; padding-left:20px; border-left:1px solid #eee; vertical-align:top;">
+                                ${rankingTableHtml}
+                            </td>
+                        </tr>
+                    </table>
+                `;
+            } else {
+                mainLayoutContent = `
+                    <div style="max-width: 600px; margin: 0 auto; text-align: center;">
+                        <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:15px;font-size:15px;font-weight:bold;text-transform:uppercase">Resumen de Precios de la Oferta Única</h3>
+                        ${compTableHtml}
+                        <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:15px;margin-top:30px;font-size:15px;font-weight:bold;text-transform:uppercase">Simulación Detallada</h3>
+                        ${simHtml}
+                    </div>
+                `;
+            }
 
 
             return `
             <div id="reportModal" class="fixed inset-0 bg-black/80 flex justify-center items-center z-50 p-4">
                 <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto flex flex-col">
                     <div class="flex justify-between p-4 border-b bg-slate-50 sticky top-0 z-20">
-                        <h2 class="font-bold text-slate-700">Informe Comercial V4.50</h2>
+                        <h2 class="font-bold text-slate-700">Informe Comercial V4.54</h2>
                         <div class="flex gap-2">
                             <button onclick="copyVisualReport()" class="bg-orange-600 text-white px-3 py-1 rounded font-bold text-sm">COPIAR IMAGEN</button>
                             <button onclick="setState({showReportModal:false})" class="text-slate-500">✕</button>
@@ -1137,48 +1354,65 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                     <div class="p-8 bg-slate-100 overflow-auto">
                         <div id="visualReportContent" style="font-family:Arial,sans-serif;max-width:800px;margin:0 auto;background:#fff;box-shadow:0 4px 15px rgba(0,0,0,0.1)">
                             
-                            <div style="background:${cBgLight};padding:30px;border-bottom:4px solid ${cAccent};display:flex;justify-content:space-between">
-                                <div><h1 style="color:${cAccent};font-size:26px;margin:0;font-weight:800">${state.config.brand.toUpperCase()}</h1><p style="color:#666;margin:5px 0 0">${state.config.brand === 'DRK' ? 'Comercializadora' : 'Asesoría Energética'}</p></div>
-                                <div style="text-align:right"><div style="font-size:22px;font-weight:900;color:${cTextDark}">ESTUDIO DE AHORRO</div><div style="color:${cPrimary};font-size:11px;text-transform:uppercase">Comparativa Profesional</div></div>
+                            <div style="background:${cBgLight};padding:30px;border-bottom:4px solid ${cAccent};">
+                                <table border="0" cellpadding="0" cellspacing="0" style="width:100%;">
+                                    <tr>
+                                        <td style="width:50%;">
+                                            <h1 style="color:${cAccent};font-size:26px;margin:0;font-weight:800">${state.config.brand.toUpperCase()}</h1>
+                                            <p style="color:#666;margin:5px 0 0;font-size:13px">${state.config.brand === 'DRK' ? 'Comercializadora' : 'Asesoría Energética'}</p>
+                                        </td>
+                                        <td style="width:50%; text-align:right; vertical-align:top;">
+                                            <div style="font-size:22px;font-weight:900;color:${cTextDark}">ESTUDIO DE AHORRO</div>
+                                            <div style="color:${cPrimary};font-size:11px;text-transform:uppercase">Comparativa Profesional</div>
+                                        </td>
+                                    </tr>
+                                </table>
                             </div>
 
                             <div style="padding:15px 30px;border-bottom:1px solid #eee;background:#fcfcfc;font-size:12px;color:#555">
-                                <div style="display:flex;justify-content:space-between;">
-                                    <div>
-                                        <strong>CLIENTE:</strong> ${state.inputs.clientName} | 
-                                        <strong>CUPS:</strong> ${state.inputs.cups} |
-                                        <strong>CÓDIGO COMERCIAL:</strong> ${state.inputs.commercialCode}
-                                    </div>
-                                    <div>
-                                        <strong>GANADORA:</strong> ${plan.retailer} |
-                                        <strong>TARIFA:</strong> ${plan.name} (${plan.model})
-                                    </div>
-                                </div>
+                                <table border="0" cellpadding="0" cellspacing="0" style="width:100%;">
+                                    <tr>
+                                        <td>
+                                            <strong>CLIENTE:</strong> ${state.inputs.clientName} | 
+                                            <strong>CUPS:</strong> ${state.inputs.cups}
+                                        </td>
+                                        <td style="text-align:right;">
+                                            <strong>GANADORA:</strong> ${plan.retailer} |
+                                            <strong>TARIFA:</strong> ${plan.name} (${plan.model})
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>CÓDIGO COMERCIAL:</strong> ${state.inputs.commercialCode}</td>
+                                        <td></td>
+                                    </tr>
+                                </table>
                             </div>
 
                             <div style="padding:30px">
-                                <div style="display:flex;justify-content:space-between;align-items:center;background:${cBgLight};border:2px solid ${cAccent};border-radius:8px;padding:20px;margin-bottom:30px">
-                                    <div>
-                                        <div style="color:${cPrimary};font-size:12px;font-weight:bold;text-transform:uppercase">MEJOR OPCIÓN: ${plan.retailer}</div>
-                                        <div style="color:${cAccent};font-size:38px;font-weight:800;line-height:1">${formatCurrency(plan.savings,0)} €</div>
-                                        <div style="color:#666;font-size:12px;margin-top:5px">AHORRO ANUAL ESTIMADO</div>
-                                    </div>
-                                    <div style="text-align:right">
-                                        <div style="font-size:12px;color:#666">Nuevo Coste Anual</div>
-                                        <div style="font-size:24px;font-weight:bold;color:${cTextDark}">${formatCurrency(plan.annualCost,2)} €</div>
-                                        <div style="font-size:11px;color:#888">vs. ${formatCurrency(state.result.current.annual,2)} € actuales</div>
-                                    </div>
-                                </div>
+                                <table border="0" cellpadding="0" cellspacing="0" style="width:100%; margin-bottom: 30px;">
+                                    <tr>
+                                        <td>
+                                            <div style="background:${cBgLight};border:2px solid ${cAccent};border-radius:8px;padding:20px;width: 100%;">
+                                                <table border="0" cellpadding="0" cellspacing="0" style="width:100%;">
+                                                    <tr>
+                                                        <td style="width: 50%; vertical-align: top;">
+                                                            <div style="color:${cPrimary};font-size:12px;font-weight:bold;text-transform:uppercase">MEJOR OPCIÓN: ${plan.retailer}</div>
+                                                            <div style="color:${cAccent};font-size:38px;font-weight:800;line-height:1">${formatCurrency(plan.savings,0)} €</div>
+                                                            <div style="color:#666;font-size:12px;margin-top:5px">AHORRO ANUAL ESTIMADO</div>
+                                                        </td>
+                                                        <td style="width: 50%; text-align:right; vertical-align: top;">
+                                                            <div style="font-size:12px;color:#666">Nuevo Coste Anual</div>
+                                                            <div style="font-size:24px;font-weight:bold;color:${cPrimary}">${formatCurrency(plan.annualCost,2)} €</div>
+                                                            <div style="font-size:11px;color:#888">vs. ${formatCurrency(state.result.current.annual,2)} € actuales</div>
+                                                        </td>
+                                                    </tr>
+                                                </table>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </table>
 
-                                ${comparativeSection}
-
-                                <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:15px;margin-top:30px;font-size:15px;font-weight:bold;text-transform:uppercase">Simulación Detallada</h3>
-                                <div style="display:flex;gap:20px">
-                                    <div style="flex:1">
-                                        ${simHtml}
-                                    </div>
-                                    ${rankingContent}
-                                </div>
+                                ${mainLayoutContent}
 
                                 <div style="margin-top:40px;border-top:1px solid #eee;padding-top:15px;display:flex;align-items:center;gap:15px">
                                     <div style="width:36px;height:36px;background:${cPrimary};color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:bold">F</div>
@@ -1192,8 +1426,9 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
         }
         
         function renderMultiCupsReport() {
+            // ... (se mantiene igual)
             if (!state.isFinalReportVisible || state.multiCupsData.length === 0) {
-                 return `<div class="p-8 text-center text-slate-500">No hay datos de CUPS guardados para el informe consolidado.</div>`;
+                return `<div class="p-8 text-center text-slate-500">No hay datos de CUPS guardados para el informe consolidado.</div>`;
             }
 
             let totalSavings = 0;
@@ -1217,36 +1452,43 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             const emailTarget = getEmailTarget();
 
             const cPrimary = '#7c2d12'; 
-            const cAccent = '#ea580c'; 
+            const cAccent = '#ea580c';  
             const cBgLight = '#fff7ed'; 
             const cTextDark = '#111827'; 
+            const cSavingsHighlight = cAccent; 
             const cOfferButton = cPrimary; 
-            
+
             const summaryHtml = `
                 <div style="background:${cBgLight};border:2px solid ${cAccent};border-radius:8px;padding:20px;margin-bottom:30px;box-shadow:0 4px 6px -1px rgb(0 0 0 / 0.1);">
-                    <h3 style="color:${cPrimary};font-size:18px;font-weight:bold;margin-bottom:10px;text-align: center;">RESUMEN CONSOLIDADO MULTICUPS (${state.multiCupsData.length} CUPS)</h3>
-                    <div style="display:flex;justify-content:space-around;text-align:center;gap:10px">
-                        <div style="flex:1;padding:10px;border-right:1px solid #eee">
-                            <div style="color:${cTextDark};font-size:20px;font-weight:800">${formatCurrency(totalSavings, 0)} €</div>
-                            <div style="color:${cAccent};font-size:12px;font-weight:bold">AHORRO TOTAL ANUAL</div>
-                        </div>
-                        <div style="flex:1;padding:10px;border-right:1px solid #eee">
-                            <div style="color:${cTextDark};font-size:16px;font-weight:bold">${formatCurrency(totalCurrentAnnualCost, 2)} €</div>
-                            <div style="color:#666;font-size:10px">Coste Anual Actual (Aprox.)</div>
-                        </div>
-                        <div style="flex:1;padding:10px">
-                            <div style="color:${cTextDark};font-size:16px;font-weight:bold">${formatCurrency(totalNewAnnualCost, 2)} €</div>
-                            <div style="color:#666;font-size:10px">Nuevo Coste Anual Total</div>
-                        </div>
-                    </div>
+                    <h3 style="color:${cPrimary};font-size:18px;font-weight:bold;margin-bottom:15px;text-align: center; line-height: 1.2;">
+                        ¡MAXIMIZA TU AHORRO! ANÁLISIS ESTRATÉGICO DE ${state.multiCupsData.length} SUMINISTROS
+                    </h3>
+                    <table border="0" cellpadding="0" cellspacing="0" style="width:100%; text-align:center;">
+                        <tr>
+                            <td style="width:33%; padding:10px; border-right:1px solid #eee;">
+                                <div style="color:${cSavingsHighlight};font-size:32px;font-weight:800">${formatCurrency(totalSavings, 0)} €</div>
+                                <div style="color:${cSavingsHighlight};font-size:16px;font-weight:bold; margin-top: 5px;">AHORRO TOTAL ANUAL ESTIMADO</div>
+                            </td>
+                            <td style="width:33%; padding:10px; border-right:1px solid #eee;">
+                                <div style="color:${cTextDark};font-size:18px;font-weight:bold">${formatCurrency(totalCurrentAnnualCost, 2)} €</div>
+                                <div style="color:#666;font-size:12px; margin-top: 5px;">Coste Anual Actual (Aprox.)</div>
+                            </td>
+                            <td style="width:33%; padding:10px;">
+                                <div style="color:${cPrimary};font-size:18px;font-weight:bold">${formatCurrency(totalNewAnnualCost, 2)} €</div>
+                                <div style="color:#666;font-size:12px; margin-top: 5px;">Nuevo Coste Anual Total</div>
+                            </td>
+                        </tr>
+                    </table>
                     
-                    <div style="margin-top:20px;padding-top:10px;border-top:1px solid #f97316;font-size:12px;background: #ffedd5; padding: 10px; border-radius: 4px;">
-                        <h4 style="font-weight:bold;color:${cPrimary};margin-bottom:5px">Ahorro por Modelo de Tarifa:</h4>
-                        <div style="display:flex;justify-content:space-between;font-size:11px">
-                            <span style="font-weight:bold">2.0TD: ${formatCurrency(savingsByTariff['2.0TD'], 0)} €</span>
-                            <span style="font-weight:bold">3.0TD: ${formatCurrency(savingsByTariff['3.0TD'], 0)} €</span>
-                            <span style="font-weight:bold">6.1TD: ${formatCurrency(savingsByTariff['6.1TD'], 0)} €</span>
-                        </div>
+                    <div style="margin-top:20px;padding-top:10px;border-top:1px solid ${cAccent};font-size:12px;background: #ffedd5; padding: 10px; border-radius: 4px;">
+                        <h4 style="font-weight:bold;color:${cPrimary};margin-bottom:10px; font-size: 14px;">AHORRO DESGLOSADO POR MODELO DE TARIFA:</h4>
+                        <table border="0" cellpadding="0" cellspacing="0" style="width:100%; font-size: 18px; font-weight: bold; color: ${cPrimary};">
+                            <tr>
+                                <td style="width:33%; text-align:center;">2.0TD: <span style="color: ${cAccent}">${formatCurrency(savingsByTariff['2.0TD'], 0)} €</span></td>
+                                <td style="width:33%; text-align:center;">3.0TD: <span style="color: ${cAccent}">${formatCurrency(savingsByTariff['3.0TD'], 0)} €</span></td>
+                                <td style="width:33%; text-align:center;">6.1TD: <span style="color: ${cAccent}">${formatCurrency(savingsByTariff['6.1TD'], 0)} €</span></td>
+                            </tr>
+                        </table>
                     </div>
                 </div>
             `;
@@ -1263,7 +1505,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
 
             let summaryCupsTableHtml = `<table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:20px; border: 1px solid #ddd;">
                 <thead>
-                    <tr style="background:#7c2d12; color:white;">
+                    <tr style="background:${cPrimary}; color:white;">
                         <th style="padding: 8px; text-align: left;">MODELO</th>
                         <th style="padding: 8px; text-align: left;">CUPS</th>
                         <th style="padding: 8px; text-align: right;">AHORRO ANUAL</th>
@@ -1277,11 +1519,11 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 summaryCupsTableHtml += `<tr style="background:${rowBg}; border-bottom: 1px solid #eee;">
                     <td style="padding: 6px; font-weight: bold; color: #333;">${model}</td>
                     <td style="padding: 6px; font-family: monospace;">${cups.cups}</td>
-                    <td style="padding: 6px; text-align: right; font-weight: bold; color: #ea580c;">${formatCurrency(cups.savings, 0)} €</td>
+                    <td style="padding: 6px; text-align: right; font-weight: bold; color: ${cSavingsHighlight};">${formatCurrency(cups.savings, 0)} €</td>
                 </tr>`;
             });
 
-            summaryCupsTableHtml += `<tr style="background:#7c2d12; color:white; font-weight:bold; border-top: 2px solid white;">
+            summaryCupsTableHtml += `<tr style="background:${cPrimary}; color:white; font-weight:bold; border-top: 2px solid white;">
                 <td colspan="2" style="padding: 8px; text-align: right;">TOTAL AHORRO CONSOLIDADO</td>
                 <td style="padding: 8px; text-align: right; font-size: 14px;">${formatCurrency(totalSavings, 0)} €</td>
             </tr></tbody></table>`;
@@ -1338,7 +1580,12 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                         `).join('')}
                         
                         <tr style="font-weight: bold; background: #e2e8f0;"><td colspan="2" style="padding: 4px 8px; text-align: right; color: ${cPrimary};">BASE IMPONIBLE (P+E)</td><td style="text-align: right; padding: 4px 8px; color: ${cPrimary};">${formatCurrency(simTotalBase, 4)} €</td></tr>
-                        <tr style="font-weight: bold; background: #ffedd5;"><td colspan="2" style="padding: 4px 8px; text-align: right;">TOTAL MES OFERTA</td><td style="text-align: right; padding: 4px 8px; color: ${cAccent}; font-size: 11px;">${formatCurrency(cups.periodCost, 2)} €</td></tr>
+                        
+                        <!-- UNIFICADO: Total Mes (Fondo cAccent) -->
+                        <tr style="background:${cAccent}; color: white; font-weight: bold; font-size: 11px;">
+                            <td colspan="2" style="padding: 6px 8px; text-align: right;">TOTAL MES OFERTA</td>
+                            <td style="text-align: right; padding: 6px 8px;">${formatCurrency(cups.periodCost, 2)} €</td>
+                        </tr>
                     </table>
                 `;
 
@@ -1348,16 +1595,18 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                             CUPS ${cups.cupsIndex}: ${cups.cups} (${cups.tariffModel}) - ${cups.plan.retailer}
                         </h4>
                         
-                        <div style="display:flex; gap: 20px;">
-                            <div style="width: 35%;">
-                                <div style="font-weight:bold; color:${cPrimary}; margin-bottom: 5px;">Tarifa / Precios Ganadores</div>
-                                ${pricesHtml}
-                            </div>
-                            <div style="flex: 1; border-left: 1px dashed #f5f5f5; padding-left: 20px;">
-                                <div style="font-weight:bold; color:${cPrimary}; margin-bottom: 5px;">Simulación Detallada (Cálculos)</div>
-                                ${simulacroHtml}
-                            </div>
-                        </div>
+                        <table border="0" cellpadding="0" cellspacing="0" style="width:100%;">
+                            <tr>
+                                <td style="width: 35%; vertical-align:top; padding-right:10px;">
+                                    <div style="font-weight:bold; color:${cPrimary}; margin-bottom: 5px; font-size: 12px;">Tarifa / Precios Ganadores</div>
+                                    ${pricesHtml}
+                                </td>
+                                <td style="width: 65%; vertical-align:top; border-left: 1px dashed #f5f5f5; padding-left: 20px;">
+                                    <div style="font-weight:bold; color:${cPrimary}; margin-bottom: 5px; font-size: 12px;">Simulación Detallada (Cálculos)</div>
+                                    ${simulacroHtml}
+                                </td>
+                            </tr>
+                        </table>
                     </div>
                 `;
             }).join('');
@@ -1369,12 +1618,23 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                         *Al hacer clic, se abrirá automáticamente su gestor de correo para enviar la solicitud de las ${state.multiCupsData.length} instalaciones.
                     </p>
                     
+                    <div style="font-size: 14px; color: ${cPrimary}; font-weight: bold; margin-bottom: 5px;">
+                        AHORRO TOTAL CONSOLIDADO:
+                    </div>
+                    <div style="font-weight: 900; font-size: 40px; color: ${cAccent}; margin-bottom: 15px; line-height: 1;">
+                        ${formatCurrency(totalSavings, 0)} €
+                    </div>
+
+                    <div style="font-weight: 800; font-size: 18px; color: ${cAccent}; margin-bottom: 10px; text-transform: uppercase;">
+                        ¡CONSIGUE TU AHORRO ANUAL!
+                    </div>
+
                     <a href="${mailtoLink}" style="display: inline-block; max-width: 400px; margin: 0 auto; text-align: center; background: ${cOfferButton}; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 14px; border: 1px solid ${cOfferButton};">
                         ACEPTAR OFERTA CONSOLIDADA (INICIAR CONTRATACIÓN)
                     </a>
                     
                     <p style="margin-top: 15px; font-size: 11px; color: #666;">
-                         Para formalizar la contratación, contacte con: <a href="mailto:${emailTarget}" style="color: ${cPrimary}; text-decoration: underline;">${emailTarget}</a>
+                        Para formalizar la contratación, contacte con: <a href="mailto:${emailTarget}" style="color: ${cPrimary}; text-decoration: underline;">${emailTarget}</a>
                     </p>
                 </div>
             `;
@@ -1383,36 +1643,48 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 <div class="fixed inset-0 bg-black/80 flex justify-center items-center z-50 p-4">
                     <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto flex flex-col">
                         <div class="flex justify-between p-4 border-b bg-slate-50 sticky top-0 z-20">
-                            <h2 class="font-bold text-slate-700">Informe Consolidado Multi-CUPS V4.50</h2>
+                            <h2 class="font-bold text-slate-700">Informe Consolidado Multi-CUPS V4.54</h2>
                             <div class="flex gap-2">
                                 <button onclick="copyVisualReport()" class="bg-orange-600 text-white px-3 py-1 rounded font-bold text-sm">COPIAR IMAGEN</button>
-                                <button onclick="resetAllState(); renderUI();" class="text-slate-500">✕</button>
+                                <button onclick="returnToCupsEntry()" class="text-slate-500">✕</button>
                             </div>
                         </div>
                         <div class="p-8 bg-slate-100 overflow-auto">
                             <div id="visualReportContent" style="font-family:Arial,sans-serif;max-width:900px;margin:0 auto;background:#fff;box-shadow:0 4px 15px rgba(0,0,0,0.1)">
                                 
-                                <div style="background:${cBgLight};padding:30px;border-bottom:4px solid ${cAccent};display:flex;justify-content:space-between">
-                                    <div><h1 style="color:${cAccent};font-size:26px;margin:0;font-weight:800">${state.config.brand.toUpperCase()}</h1><p style="color:#666;margin:5px 0 0">ASESORÍA ENERGÉTICA MULTICUPS</p></div>
-                                    <div style="text-align:right"><div style="font-size:22px;font-weight:900;color:${cTextDark}">INFORME CONSOLIDADO</div><div style="color:${cPrimary};font-size:11px;text-transform:uppercase">Comparativa Profesional</div></div>
+                                <div style="background:${cBgLight};padding:30px;border-bottom:4px solid ${cAccent};">
+                                    <table border="0" cellpadding="0" cellspacing="0" style="width:100%;">
+                                        <tr>
+                                            <td style="width:50%;">
+                                                <h1 style="color:${cAccent};font-size:26px;margin:0;font-weight:800">${state.config.brand.toUpperCase()}</h1>
+                                                <p style="color:#666;margin:5px 0 0;font-size:13px">ASESORÍA ENERGÉTICA MULTICUPS</p>
+                                            </td>
+                                            <td style="width:50%; text-align:right; vertical-align:top;">
+                                                <div style="font-size:22px;font-weight:900;color:${cTextDark}">INFORME CONSOLIDADO</div>
+                                                <div style="color:${cPrimary};font-size:11px;text-transform:uppercase">Comparativa Profesional</div>
+                                            </td>
+                                        </tr>
+                                    </table>
                                 </div>
 
                                 <div style="padding:15px 30px;border-bottom:1px solid #eee;background:#fcfcfc;font-size:12px;color:#555">
-                                    <div style="display:flex;justify-content:space-between;">
-                                        <div>
-                                            <strong>CLIENTE:</strong> ${state.multiCupsData[0]?.clientName || 'Cliente Consolidado'} | 
-                                            <strong>CÓDIGO COMERCIAL:</strong> ${state.multiCupsData[0]?.plan?.tariffDetails?.commercialCode || state.inputs.commercialCode || 'N/A'}
-                                        </div>
-                                        <div>
-                                            <strong>TOTAL CUPS ANALIZADOS:</strong> ${state.multiCupsData.length}
-                                        </div>
-                                    </div>
+                                    <table border="0" cellpadding="0" cellspacing="0" style="width:100%;">
+                                        <tr>
+                                            <td>
+                                                <strong>CLIENTE:</strong> ${state.multiCupsData[0]?.clientName || 'Cliente Consolidado'} | 
+                                                <strong>CÓDIGO COMERCIAL:</strong> ${state.multiCupsData[0]?.plan?.tariffDetails?.commercialCode || state.inputs.commercialCode || 'N/A'}
+                                            </td>
+                                            <td style="text-align:right;">
+                                                <strong>TOTAL CUPS ANALIZADOS:</strong> ${state.multiCupsData.length}
+                                            </td>
+                                        </tr>
+                                    </table>
                                 </div>
 
                                 <div style="padding:30px">
                                     ${summaryHtml}
 
-                                    <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:15px;font-size:15px;font-weight:bold;text-transform:uppercase">Resumen de Ahorro por Modelo de Tarifa</h3>
+                                    <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:15px;font-size:15px;font-weight:bold;text-transform:uppercase">Resumen de Ahorro por Suministro Individual</h3>
                                     ${summaryCupsTableHtml}
                                     
                                     <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:20px;margin-top:30px;font-size:15px;font-weight:bold;text-transform:uppercase">Detalle Individual por Suministro (CUPS)</h3>
@@ -1439,6 +1711,226 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 </div>
             `;
         }
+        
+        // --- GLOBAL QR HANDLERS (Moved from renderQRScannerModal's embedded script) ---
+        let QR_CANVAS, QR_CTX, QR_PASTE_ZONE, QR_PREVIEW, QR_RAW, QR_PARSED;
+
+        const FRIENDLY_NAMES_QR = {
+            'iniF': "Fecha Inicio Facturado",
+            'finF': "Fecha Fin Facturado",
+            'fFact': "Fecha Factura",
+            'cp': "Código Postal",
+            'cups': "CUPS",
+            'cfP1': "Consumo Punta (E1) [kWh]",
+            'cfP2': "Consumo Llano (E2) [kWh]",
+            'cfP3': "Consumo Valle (E3) [kWh]",
+            'pP1': "Potencia Punta (P1) [kW]",
+            'pP2': "Potencia Valle (P2) [kW]",
+            'imp': "Importe Total Facturado [€]",
+            'finContrato': "Permanencia (Fin Contrato)",
+        };
+
+        function kv(k, v) {
+            return `<div class="qr-kv"><span>${k}</span><span class="font-bold text-slate-800">${v}</span></div>`;
+        }
+
+        function parseQR(text) {
+            const params = {};
+            text.split("&").forEach(pair => {
+                const [key, value] = pair.split("=");
+                if(key && value) {
+                    // Reemplaza comas por puntos para números decimales y decodifica
+                    params[key] = decodeURIComponent(value.replace(/,/g, '.').trim() || "");
+                }
+            });
+            return params;
+        }
+
+        function renderQRData(d) {
+            // Calcular consumo total para mostrar
+            const totalConsumption = (parseFloat(d.cfP1) || 0) + (parseFloat(d.cfP2) || 0) + (parseFloat(d.cfP3) || 0);
+
+            let html = `<p class="font-bold text-orange-600 mb-2">CUPS: ${d.cups || 'No encontrado'}</p>`;
+            
+            const keys = ['iniF', 'finF', 'fFact', 'cp', 'imp', 'pP1', 'pP2', 'cfP1', 'cfP2', 'cfP3'];
+
+            keys.forEach(key => {
+                let value = d[key] || "-";
+                const keyName = FRIENDLY_NAMES_QR[key] || key;
+                
+                // Añadir unidades para la visualización en el modal
+                if (key.startsWith('pP')) value += ' kW';
+                else if (key.startsWith('cfP')) value += ' kWh';
+                else if (key === 'imp') value += ' €';
+
+                html += kv(keyName, value);
+            });
+
+            // Añadir el Consumo Total Facturado (calculado)
+             html += `<div class="qr-kv bg-orange-50 mt-2 font-bold text-orange-800">
+                <span>CONSUMO TOTAL FACTURADO</span>
+                <span>${formatCurrency(totalConsumption, 0)} kWh</span>
+            </div>`;
+            
+            if (QR_PARSED) QR_PARSED.innerHTML = html;
+        }
+
+        function processImage(file) {
+            const reader = new FileReader();
+            reader.onload = ev => {
+                const img = new Image();
+                img.onload = () => {
+                    if (QR_PREVIEW) {
+                        QR_PREVIEW.src = ev.target.result;
+                        QR_PREVIEW.style.display = "block";
+                    }
+
+                    if (!QR_CANVAS || !QR_CTX) return;
+
+                    QR_CANVAS.width = img.width;
+                    QR_CANVAS.height = img.height;
+                    QR_CTX.drawImage(img, 0, 0);
+
+                    const imageData = QR_CTX.getImageData(0, 0, QR_CANVAS.width, QR_CANVAS.height);
+                    const code = jsQR(imageData.data, QR_CANVAS.width, QR_CANVAS.height);
+
+                    if (!code) {
+                        if (QR_RAW) QR_RAW.value = "No se pudo leer el QR. Intenta con una captura más nítida.";
+                        if (QR_PARSED) QR_PARSED.innerHTML = "❌ No se pudo localizar o decodificar el Código QR.";
+                        return;
+                    }
+
+                    if (QR_RAW) QR_RAW.value = code.data;
+                    const data = parseQR(code.data);
+                    renderQRData(data);
+                    
+                    // LLAMADA AL EXTERIOR: Mapeo de datos para la aplicación principal
+                    if (data.cups && data.imp) {
+                        window.applyQRData(data); // Llama a la función del scope principal
+                    }
+                };
+                img.src = ev.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function handleQRModalPaste(e) {
+            const items = e.clipboardData.items;
+            let imageDetected = false;
+            for (let item of items) {
+                if (item.type.indexOf("image") !== -1) {
+                    const file = item.getAsFile();
+                    processImage(file);
+                    imageDetected = true;
+                    e.preventDefault();
+                    break;
+                }
+            }
+            if (!imageDetected) {
+                if (QR_RAW) QR_RAW.value = "No se detectó una imagen válida en el portapapeles.";
+                if (QR_PARSED) QR_PARSED.innerHTML = "No se pudo leer la imagen.";
+                if (QR_PREVIEW) QR_PREVIEW.style.display = "none";
+            }
+        }
+
+        function handleQRModalDragOver(e) {
+            e.preventDefault();
+            if (QR_PASTE_ZONE) QR_PASTE_ZONE.classList.add('focused');
+        }
+
+        function handleQRModalDragLeave(e) {
+            e.preventDefault();
+            if (QR_PASTE_ZONE) QR_PASTE_ZONE.classList.remove('focused');
+        }
+
+        function handleQRModalDrop(e) {
+            e.preventDefault();
+            if (QR_PASTE_ZONE) QR_PASTE_ZONE.classList.remove('focused');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].type.startsWith("image")) {
+                processImage(files[0]);
+            } else {
+                if (QR_PARSED) QR_PARSED.innerHTML = "El archivo soltado no es una imagen válida.";
+                if (QR_RAW) QR_RAW.value = "Error: El archivo soltado no es una imagen válida.";
+                if (QR_PREVIEW) QR_PREVIEW.style.display = "none";
+            }
+        }
+
+        function setupQRModalListeners() {
+            // Eliminar listeners previos para evitar duplicados
+            if (QR_PASTE_ZONE) {
+                QR_PASTE_ZONE.removeEventListener("paste", handleQRModalPaste);
+                QR_PASTE_ZONE.removeEventListener('dragover', handleQRModalDragOver);
+                QR_PASTE_ZONE.removeEventListener('dragleave', handleQRModalDragLeave);
+                QR_PASTE_ZONE.removeEventListener('drop', handleQRModalDrop);
+                QR_PASTE_ZONE.removeEventListener("focus", () => QR_PASTE_ZONE.classList.add("focused"));
+                QR_PASTE_ZONE.removeEventListener("blur", () => QR_PASTE_ZONE.classList.remove("focused"));
+            }
+
+            QR_PASTE_ZONE = document.getElementById("pasteZone");
+            QR_PREVIEW = document.getElementById("qr-preview");
+            QR_RAW = document.getElementById("raw-qr-data");
+            QR_PARSED = document.getElementById("parsed-qr-data");
+            QR_CANVAS = document.getElementById("qr-canvas");
+            QR_CTX = QR_CANVAS ? QR_CANVAS.getContext("2d") : null;
+            
+            if (QR_PASTE_ZONE) {
+                // Manejo de enfoque y desenfoque
+                QR_PASTE_ZONE.addEventListener("focus", () => QR_PASTE_ZONE.classList.add("focused"));
+                QR_PASTE_ZONE.addEventListener("blur", () => QR_PASTE_ZONE.classList.remove("focused"));
+
+                // Manejo del evento de pegado
+                QR_PASTE_ZONE.addEventListener("paste", handleQRModalPaste);
+                
+                // Manejo de Drag & Drop
+                QR_PASTE_ZONE.addEventListener('dragover', handleQRModalDragOver);
+                QR_PASTE_ZONE.addEventListener('dragleave', handleQRModalDragLeave);
+                QR_PASTE_ZONE.addEventListener('drop', handleQRModalDrop);
+            }
+        }
+        // --- FIN GLOBAL QR HANDLERS ---
+
+
+        // --- RENDERIZADO DE MODAL QR (NUEVO) ---
+        function renderQRScannerModal() {
+            if (!state.showQRScannerModal) return '';
+
+            // Ya no se incluye el script aquí, solo el HTML del modal
+            return `
+                <div id="qrScannerModal" class="fixed inset-0 bg-black/80 flex justify-center items-center z-50 p-4">
+                    <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto flex flex-col">
+                        <div class="flex justify-between p-4 border-b bg-slate-50 sticky top-0 z-20">
+                            <h2 class="font-bold text-slate-700 flex items-center gap-2">${renderIcon('scan-line','w-5 h-5 text-orange-600')} Escáner QR CNMC (2.0TD)</h2>
+                            <button onclick="setState({showQRScannerModal:false})" class="text-slate-500">✕</button>
+                        </div>
+                        <div class="p-6 bg-slate-100 overflow-auto">
+                            <div class="bg-white p-6 rounded-xl shadow-lg">
+                                <h3 class="text-lg font-bold text-slate-700 mb-2">Paso 1: Pegar Captura de Pantalla</h3>
+                                <p class="text-sm text-slate-600 mb-4">
+                                    Haz clic en el cuadro, toma una captura de pantalla del código QR (Ctrl+Shift+S o Cmd+Shift+4) y pégala con <strong>Ctrl+V</strong>.
+                                </p>
+
+                                <div id="pasteZone" class="qr-paste-zone" tabindex="0">
+                                    Haz clic aquí y pulsa <strong>Ctrl+V</strong> para pegar la captura del QR.
+                                </div>
+
+                                <img id="qr-preview" alt="QR Preview">
+
+                                <h3 class="text-lg font-bold text-slate-700 mt-6 mb-2">Paso 2: Resultado del Escaneo</h3>
+                                <textarea id="raw-qr-data" placeholder="Aquí aparecerá la cadena de texto cruda del código QR (Ej: iniF=...&cfP1=...)" rows="3" readonly class="w-full p-2 border rounded font-mono text-xs"></textarea>
+
+                                <h3 class="text-lg font-bold text-slate-700 mt-6 mb-2">Paso 3: Datos de Factura Mapeados</h3>
+                                <div id="parsed-qr-data" class="qr-block">Pega una captura de un QR válido para ver los datos de la factura.</div>
+                                
+                                <canvas id="qr-canvas" style="display:none;"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
 
         function renderUI() {
             const mainGrid = document.getElementById('main-content-grid');
@@ -1464,9 +1956,27 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 if (resultsSection) resultsSection.innerHTML = renderResults();
                 
                 const modalContainer = document.getElementById('modal-container');
-                if (modalContainer) modalContainer.innerHTML = state.showReportModal ? renderReportModal() : '';
+                if (modalContainer) {
+                    const qrModalHtml = state.showQRScannerModal ? renderQRScannerModal() : '';
+                    const reportModalHtml = state.showReportModal ? renderReportModal() : '';
+                    
+                    modalContainer.innerHTML = reportModalHtml + qrModalHtml;
+                    
+                    // NUEVO: Llama a la función de configuración de listeners solo si el modal QR está visible
+                    if (state.showQRScannerModal) {
+                        setupQRModalListeners(); 
+                    }
+                }
             }
             
+            // --- INICIO: CORRECCIÓN DE DÍAS VISIBLES EN EL INPUT DE CABECERA ---
+            const daysInput = document.getElementById('days-input');
+            if (daysInput && state.config.tariff === '2.0TD' && daysInput.value !== String(state.config.days)) {
+                 // Forzar la actualización del valor del DOM si la tarifa es 2.0TD (deshabilitada) y el valor ha cambiado.
+                 daysInput.value = state.config.days;
+            }
+            // --- FIN: CORRECCIÓN DE DÍAS VISIBLES EN EL INPUT DE CABECERA ---
+
             if (window.lucide) window.lucide.createIcons();
             
             const brandElement = document.getElementById('main-brand');
@@ -1476,6 +1986,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
         }
 
         function renderTariffDatabaseSection() {
+            // ... (se mantiene igual, se eliminó la función de renderizado para simplificar el código)
             const hasData = state.uploadedTariffs.length > 0;
             const allResults = state.comparisonResults;
             const selectedRetailers = getSelectedRetailers(state.selectedRankingIds, allResults);
@@ -1485,7 +1996,6 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 ? `(Última carga: ${lastUploadDate.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })})` 
                 : '(No hay tarifas cargadas)';
 
-            // Nuevo indicador de modo de persistencia
             const persistenceMode = isFirebaseReady ? 
                 `<span class="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full flex items-center gap-1">${renderIcon('cloud','w-3 h-3')} Nube (Firebase)</span>` :
                 `<span class="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded-full flex items-center gap-1">${renderIcon('hard-drive','w-3 h-3')} Local (LocalStorage)</span>`;
@@ -1501,7 +2011,6 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             const winningSavings = winningPlan ? winningPlan.savings : Infinity;
 
             const isDrkBrand = state.config.brand === 'DRK';
-            const isSingleMode = state.config.isSinglePresentationMode;
             
             const winningRetailerOptions = [...new Set(allResults.map(r => r.retailer))].sort();
 
@@ -1544,20 +2053,20 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 <!-- SECCIÓN DE CARGA Y FILTROS -->
                 ${!hasData ? `<div class="relative group"><input type="file" accept=".xlsx,.csv" onchange="handleExcelUpload(event)" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"><button class="w-full bg-orange-600 text-white py-2 rounded font-bold flex justify-center gap-2">${state.isScanning?renderIcon('loader','animate-spin'):renderIcon('upload','')} ${calculateButtonText}</button></div>` : 
                 `
-                <!-- BOTONES DE CARGA Y BORRADO (MOVIDOS ARRIBA) -->
+                <!-- BOTONES DE CARGA Y BORRADO -->
                 <div class="mb-4 pt-4 border-t border-slate-200 grid grid-cols-2 gap-4"> 
-                     <div class="relative group">
+                    <div class="relative group">
                         <input type="file" accept=".xlsx,.csv" onchange="handleExcelUpload(event)" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
                         <button class="w-full bg-slate-200 text-slate-800 py-2 rounded font-bold flex justify-center gap-2 hover:bg-slate-300">
                             ${renderIcon('upload','w-5 h-5')} SUBIR Y REEMPLAZAR TARIFAS (Excel)
                         </button>
                     </div>
-                     <button onclick="deleteTariffsFromStorage()" class="w-full bg-red-500 text-white py-2 rounded font-bold flex justify-center gap-2 hover:bg-red-600 ${!hasData ? 'opacity-50 cursor-not-allowed' : ''}" ${!hasData ? 'disabled' : ''}>
+                   <button onclick="deleteTariffsFromStorage()" class="w-full bg-red-500 text-white py-2 rounded font-bold flex justify-center gap-2 hover:bg-red-600 ${!hasData ? 'opacity-50 cursor-not-allowed' : ''}" ${!hasData ? 'disabled' : ''}>
                         ${renderIcon('trash-2','w-5 h-5')} BORRAR TARIFAS GUARDADAS
                     </button>
                 </div>
                 
-                <!-- SECCIÓN DE FILTROS Y CALCULAR (Mantenida) -->
+                <!-- SECCIÓN DE FILTROS Y CALCULAR -->
                 <div class="grid md:grid-cols-4 gap-4 items-end">
                     ${isMultiCups ? 
                         `
@@ -1657,8 +2166,6 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             </div>`;
         }
 
-        function renderComparisonModeSelector() { return ''; } 
-
         function renderClientInputs() {
             const currentTariffModel = state.config.tariff;
             const rows = [1,2,3,4,5,6].map(i => {
@@ -1685,6 +2192,12 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 <input type="text" placeholder="Nombre Cliente" class="w-full border-b p-2 outline-none mb-2 font-bold text-slate-700" oninput="handleInputRaw('clientName',this.value,'inputs')" onblur="handleInputBlur('clientName',this.value,'inputs')" value="${state.inputs.clientName}">
                 <input type="text" placeholder="CUPS" class="w-full border-b p-2 outline-none text-xs uppercase" oninput="handleInputRaw('cups',this.value,'inputs')" onblur="handleInputBlur('cups',this.value,'inputs')" value="${state.inputs.cups}">
             </div>`;
+            
+            // NUEVO: Botón de escaneo QR para 2.0TD
+            const qrScannerButton = (currentTariffModel === '2.0TD') ? 
+                `<button onclick="openQRScanner()" class="w-full bg-slate-200 text-slate-800 py-2 rounded font-bold flex justify-center gap-2 hover:bg-slate-300 items-center">
+                    ${renderIcon('qr-code','w-5 h-5')} ESCANEAR QR FACTURA (2.0TD)
+                </button>` : '';
 
 
             return `
@@ -1692,6 +2205,8 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             <div class="bg-white p-4 rounded-xl shadow mb-6">
                 <h3 class="font-bold text-slate-700 mb-3 flex gap-2">${renderIcon('zap','w-4 h-4 text-yellow-500')} Datos Factura (${currentTariffModel})</h3>
             
+                <div class="mb-4">${qrScannerButton}</div> 
+
                 <div class="mb-4"><label class="text-xs font-bold text-slate-500">Total Factura (€)</label><input type="number" step="0.01" oninput="handleInputRaw('clientTotalInvoice', this.value)" onblur="handleInputBlur('clientTotalInvoice', this.value)" class="w-full p-2 text-lg font-bold border rounded focus:border-orange-500" placeholder="0.00" value="${state.inputs.clientTotalInvoice||''}"></div>
             
                 ${codeInput}
@@ -1701,6 +2216,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
         }
 
         function renderResults() {
+            // ... (se mantiene igual)
             if(!state.result || !state.config.winningTariffId) return '';
             const plan = state.result.bestPlan;
             const isReady = !!plan && !!state.result.current;
@@ -1798,7 +2314,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
         <header class="flex justify-between items-center mb-6">
             <h1 class="text-2xl font-black text-slate-800 tracking-tight">
                 <span id="main-brand" class="text-orange-600">${state.config.brand}</span> 
-                <span class="text-slate-400 font-light text-lg">| Comparador V4.50</span>
+                <span class="text-slate-400 font-light text-lg">| Comparador V4.54</span>
             </h1>
             <div class="flex gap-4 items-center">
                 
@@ -1820,7 +2336,15 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                     <option value="2.0TD" ${state.config.tariff === '2.0TD' ? 'selected' : ''}>2.0TD</option>
                     <option value="6.1TD" ${state.config.tariff === '6.1TD' ? 'selected' : ''}>6.1TD</option>
                 </select>
-                <input type="number" value="31" onblur="handleConfigChange('days',this.value)" class="w-12 text-center border rounded p-1 font-bold text-sm text-slate-600 shadow-sm" title="Días Factura">
+                <!-- Días de facturación: Muestra el valor de estado. Sólo editable si NO es 2.0TD o si se edita el valor actual. -->
+                <input type="number" 
+                    id="days-input" 
+                    value="${state.config.days}" 
+                    onblur="handleConfigChange('days',this.value)" 
+                    class="w-12 text-center border rounded p-1 font-bold text-sm text-slate-600 shadow-sm" 
+                    title="Días Factura"
+                    ${state.config.tariff === '2.0TD' ? 'disabled' : ''}
+                    >
 
                 <label class="flex items-center space-x-2 text-xs font-medium text-slate-700 ${state.config.brand === 'DRK' ? 'opacity-50' : ''}">
                     <input type="checkbox" 
