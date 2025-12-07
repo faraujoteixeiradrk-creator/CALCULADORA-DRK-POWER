@@ -1,0 +1,1847 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DRK ENERGÍA | Comparador Pro V4.50</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- SheetJS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    
+    <!-- Firebase Imports for Persistence -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, setLogLevel, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Expose Firebase objects globally for use in the main script block
+        window.firebase = { 
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken,
+            getFirestore, doc, setDoc, getDoc, setLogLevel, deleteDoc
+        };
+    </script>
+    
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f1f5f9; }
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #ea580c; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background-color: #e2e8f0; }
+        .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    </style>
+    <script>
+        const PDF_JS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+
+        // --- ESTADO Y CONFIGURACIÓN FIREBASE/LOCAL ---
+        let db, auth, userId, appId;
+        let isFirebaseReady = false; // Bandera para saber si la conexión a la nube es exitosa
+        
+        let state = {
+            config: { 
+                tariff: '2.0TD', 
+                days: 31, 
+                comparisonType: 'total', 
+                inputMode: 'manual', 
+                retailerFilter: '', 
+                segmentFilter: '', 
+                winningTariffId: null, 
+                isSinglePresentationMode: false, 
+                reportHeader: 'DRK Energía | Asesoría Energética', 
+                brand: 'POWER CUP', 
+                rankingRetailerFilter: '', 
+                winningRetailerFilter: '',
+                isMultiCupsMode: false, 
+                lastUploadDate: null // Fecha de última carga
+            }, 
+            inputs: { clientName: '', cups: '', commercialCode: '', p1_kw: 0, p2_kw: 0, p3_kw: 0, p4_kw: 0, p5_kw: 0, p6_kw: 0, p1_kwh: 0, p2_kwh: 0, p3_kwh: 0, p4_kwh: 0, p5_kwh: 0, p6_kwh: 0, clientTotalInvoice: 0 },
+            currentPrices: { p1_pow: 0, p2_pow: 0, p3_pow: 0, p4_pow: 0, p5_pow: 0, p6_pow: 0, p1_en: 0, p2_en: 0, p3_en: 0, p4_en: 0, p5_en: 0, p6_en: 0 },
+            uploadedTariffs: [], 
+            comparisonResults: [], 
+            result: null, 
+            isScanning: false, 
+            scanStatus: "Esperando...", 
+            showReportModal: false, 
+            retailerFilterOptions: [], 
+            segmentFilterOptions: [], 
+            selectedRankingIds: [],
+            
+            multiCupsData: [], 
+            currentCupsIndex: 0, 
+            currentStudyResult: null, 
+            isFinalReportVisible: false, 
+        };
+        
+        function resetAllState() {
+            state.inputs = { clientName: '', cups: '', commercialCode: '', p1_kw: 0, p2_kw: 0, p3_kw: 0, p4_kw: 0, p5_kw: 0, p6_kw: 0, p1_kwh: 0, p2_kwh: 0, p3_kwh: 0, p4_kwh: 0, p5_kwh: 0, p6_kwh: 0, clientTotalInvoice: 0 };
+            state.currentPrices = { p1_pow: 0, p2_pow: 0, p3_pow: 0, p4_pow: 0, p5_pow: 0, p6_pow: 0, p1_en: 0, p2_en: 0, p3_en: 0, p4_en: 0, p5_en: 0, p6_en: 0 };
+            state.comparisonResults = [];
+            state.result = null;
+            state.selectedRankingIds = [];
+            
+            state.multiCupsData = [];
+            state.currentCupsIndex = 0;
+            state.currentStudyResult = null;
+            state.isFinalReportVisible = false;
+
+            state.config = { ...state.config, 
+                segmentFilter: '', 
+                winningTariffId: null,
+                retailerFilter: '',
+                rankingRetailerFilter: '',
+                winningRetailerFilter: ''
+            };
+        }
+
+        // --- FIREBASE AND LOCAL STORAGE FUNCTIONS ---
+        
+        // Carga tarifas: Intenta Firebase (si está listo), si falla/no está, usa localStorage.
+        async function loadTariffsFromStorage() {
+            let loaded = false;
+            
+            // 1. Intentar cargar desde Firebase (Nube)
+            if (db && userId && isFirebaseReady) {
+                const { doc, getDoc } = window.firebase;
+                try {
+                    const docRef = doc(db, 'artifacts', appId, 'users', userId, 'tariff_database', 'current_tariffs');
+                    const docSnap = await getDoc(docRef);
+
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        const tariffs = data.tariffs || [];
+                        const uploadDate = data.uploadDate ? new Date(data.uploadDate) : null;
+                        
+                        setState({
+                            uploadedTariffs: tariffs,
+                            config: { ...state.config, lastUploadDate: uploadDate },
+                            retailerFilterOptions: [...new Set(tariffs.map(t=>t.retailer))],
+                            segmentFilterOptions: [...new Set(tariffs.map(t=>t.segment))].sort(),
+                        });
+                        showNotification(`Tarifas cargadas de la Nube (${tariffs.length}).`, 'info');
+                        loaded = true;
+                    } 
+                } catch (e) {
+                    console.error("Error al cargar tarifas de Firestore:", e);
+                    // Si falla, se intentará LocalStorage
+                }
+            }
+
+            // 2. Intentar cargar desde LocalStorage (Respaldo Local)
+            if (!loaded && typeof localStorage !== 'undefined') {
+                try {
+                    const savedData = localStorage.getItem('drk_tariffs');
+                    if (savedData) {
+                        const data = JSON.parse(savedData);
+                        const tariffs = data.tariffs || [];
+                        const uploadDate = data.uploadDate ? new Date(data.uploadDate) : null;
+                        
+                        setState({
+                            uploadedTariffs: tariffs,
+                            config: { ...state.config, lastUploadDate: uploadDate },
+                            retailerFilterOptions: [...new Set(tariffs.map(t=>t.retailer))],
+                            segmentFilterOptions: [...new Set(tariffs.map(t=>t.segment))].sort(),
+                        });
+                        if (tariffs.length > 0) {
+                             showNotification(`Tarifas cargadas de LocalStorage (${tariffs.length}). La persistencia es local.`, 'info');
+                        }
+                    } else if (isFirebaseReady) {
+                         showNotification("No se encontraron tarifas guardadas en la Nube.", 'info');
+                    } else {
+                         showNotification("No se encontraron tarifas guardadas localmente.", 'info');
+                    }
+                } catch (e) {
+                    console.error("Error al cargar tarifas de LocalStorage:", e);
+                }
+            }
+        }
+
+        // Guarda tarifas: Usa Firebase (si está listo), si no, usa localStorage.
+        async function saveTariffsToStorage(tariffs) {
+            const now = new Date();
+            const docData = {
+                uploadDate: now.toISOString(),
+                tariffs: tariffs
+            };
+
+            // 1. Intentar guardar en Firebase (Nube)
+            if (db && userId && isFirebaseReady) {
+                const { doc, setDoc } = window.firebase;
+                try {
+                    const docRef = doc(db, 'artifacts', appId, 'users', userId, 'tariff_database', 'current_tariffs');
+                    await setDoc(docRef, docData);
+                    setState({ config: { ...state.config, lastUploadDate: now } });
+                    console.log("Tariffs saved to Firestore successfully.");
+                    showNotification("¡Tarifas guardadas en la Nube con éxito!", 'success');
+                } catch (e) {
+                    console.error("Error al guardar tarifas en Firestore:", e);
+                    showNotification("Error al guardar tarifas en la Nube. Intentando LocalStorage...", 'error');
+                }
+            }
+            
+            // 2. Intentar guardar en LocalStorage (Respaldo Local o Única Opción)
+            if (typeof localStorage !== 'undefined') {
+                try {
+                    localStorage.setItem('drk_tariffs', JSON.stringify(docData));
+                    setState({ config: { ...state.config, lastUploadDate: now } });
+                    if (!isFirebaseReady) {
+                         showNotification("Tarifas guardadas localmente (LocalStorage).", 'success');
+                    }
+                } catch (e) {
+                    console.error("Error al guardar tarifas en LocalStorage:", e);
+                    showNotification("Error al guardar tarifas localmente.", 'error');
+                }
+            }
+        }
+        
+        async function deleteTariffsFromStorage() {
+            if (state.uploadedTariffs.length === 0) {
+                 return showNotification("No hay tarifas cargadas para borrar.", 'info');
+            }
+            
+            let deletedFromCloud = false;
+            
+            // 1. Intentar borrar de Firebase (Nube)
+            if (db && userId && isFirebaseReady) {
+                const { doc, deleteDoc } = window.firebase;
+                try {
+                    const docRef = doc(db, 'artifacts', appId, 'users', userId, 'tariff_database', 'current_tariffs');
+                    await deleteDoc(docRef);
+                    deletedFromCloud = true;
+                } catch (e) {
+                    console.error("Error al borrar tarifas de Firestore:", e);
+                }
+            }
+            
+            // 2. Borrar de LocalStorage
+            if (typeof localStorage !== 'undefined') {
+                localStorage.removeItem('drk_tariffs');
+            }
+            
+            // Resetear el estado local
+            setState({
+                uploadedTariffs: [],
+                comparisonResults: [],
+                result: null,
+                retailerFilterOptions: [],
+                segmentFilterOptions: [],
+                selectedRankingIds: [],
+                config: {
+                    ...state.config,
+                    lastUploadDate: null,
+                    segmentFilter: '', 
+                    winningTariffId: null,
+                    retailerFilter: '',
+                    rankingRetailerFilter: '',
+                    winningRetailerFilter: ''
+                }
+            });
+            showNotification(`¡Base de datos de tarifas eliminada con éxito! (Fuente: ${deletedFromCloud ? 'Nube y Local' : 'Solo Local'})`, 'success');
+        }
+
+        // --- INICIALIZACIÓN DE FIREBASE Y DATOS ---
+        
+        async function initializeFirebaseAndLoadData() {
+            if (window.firebase) {
+                const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, getFirestore, setLogLevel } = window.firebase;
+                
+                // setLogLevel('Debug'); // Descomentar para depurar Firebase
+                
+                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+                if (Object.keys(firebaseConfig).length > 0) {
+                    const app = initializeApp(firebaseConfig);
+                    db = getFirestore(app);
+                    auth = getAuth(app);
+                    
+                    try {
+                        let userCredential;
+                        // 1. Handle Sign-in (Custom Token or Anonymous)
+                        if (typeof __initial_auth_token !== 'undefined') {
+                            userCredential = await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            userCredential = await signInAnonymously(auth);
+                        }
+                        userId = userCredential.user.uid;
+                        isFirebaseReady = true; 
+                    } catch (e) {
+                        console.error("Error al autenticar o cargar datos (Conexión Nube Fallida):", e);
+                        isFirebaseReady = false; 
+                        // Aviso específico para el usuario local
+                        showNotification("La conexión a la Nube (Firebase) falló. Usando LocalStorage para guardar/cargar tarifas.", 'error');
+                    }
+                } else {
+                    isFirebaseReady = false;
+                    console.warn("Falta la configuración de Firebase. La persistencia está deshabilitada (Usando LocalStorage).");
+                }
+            } else {
+                isFirebaseReady = false;
+                console.error("Módulos de Firebase no cargados.");
+            }
+
+            // 3. Cargar datos (usando la función que intenta LocalStorage si Firebase falló)
+            await loadTariffsFromStorage(); 
+            // 4. Renderizar la UI
+            renderUI(); 
+        }
+
+        // --- V4.50 Initialization Entry Point ---
+        function initializeApp() { 
+            resetAllState();
+            state.config.tariff = '2.0TD';
+            state.config.isMultiCupsMode = false;
+            
+            initializeFirebaseAndLoadData();
+        }
+
+        // --- UTILIDADES ---
+        const formatCurrency = (n, d=2) => {
+            if (typeof n !== 'number' || isNaN(n) || !isFinite(n)) return '0';
+            return new Intl.NumberFormat('es-ES', { minimumFractionDigits: d, maximumFractionDigits: d }).format(n);
+        };
+        const parseNumericInput = (v) => {
+            if (!v && v !== 0) return 0;
+            if (typeof v === 'number') return v;
+            let s = String(v).trim();
+            if (s.includes('.') && s.includes(',')) s = s.replace(/\./g, "").replace(",", ".");
+            else if (s.includes(',')) s = s.replace(",", ".");
+            return parseFloat(s) || 0;
+        };
+        
+        function getTariffPeriods(model) {
+            const m = model ? model.toUpperCase().trim() : '';
+            const isHV = m.includes('3.0TD') || m.includes('6.1TD');
+            return {
+                p: isHV ? 6 : 2, 
+                e: isHV ? 6 : 3  
+            };
+        }
+
+        function getTariffCategory(model) {
+            const m = model ? model.toUpperCase().trim() : '';
+            if (m.includes('2.0TD')) return '2.0TD';
+            if (m.includes('3.0TD')) return '3.0TD';
+            if (m.includes('6.1TD')) return '6.1TD';
+            return 'OTHER';
+        }
+
+        function getEmailTarget() {
+            return state.config.brand === 'DRK' ? 'f.araujo@drk.es' : 'f.araujo@powercup.es';
+        }
+
+        // --- HANDLERS (INPUT FIX) ---
+        function handleInputRaw(name, value, type = 'inputs') {
+             if (['clientName', 'cups', 'commercialCode'].includes(name)) {
+                state.inputs[name] = String(value).trim();
+             } else {
+                state.inputs[name] = parseNumericInput(value);
+             }
+        }
+        function handleInputBlur(name, value, type = 'inputs') {
+            const val = ['clientName', 'cups', 'commercialCode'].includes(name) ? String(value).trim() : parseNumericInput(value);
+            if (type === 'inputs') { state.inputs[name] = val; setState({ inputs: state.inputs }); }
+            else { state.currentPrices[name] = val; setState({ currentPrices: state.currentPrices }); }
+        }
+
+        // --- HANDLERS GENERALES ---
+        function setState(ns) { 
+            Object.assign(state, ns); 
+            if (state.config.winningTariffId) {
+                const winningPlan = state.comparisonResults.find(p => p.id === state.config.winningTariffId);
+                if (winningPlan && state.result?.current) {
+                     state.result.bestPlan = winningPlan;
+                }
+            }
+            renderUI(); 
+        }
+
+        function handleBrandChange(e) {
+            const newBrand = e.target.value;
+            const isDrk = newBrand === 'DRK';
+            const newHeader = isDrk ? 'DRK Energía | Comercializadora' : 'POWER CUP | Asesoría Energética';
+            
+            setState({ 
+                config: { 
+                    ...state.config, 
+                    brand: newBrand, 
+                    reportHeader: newHeader, 
+                    segmentFilter: '', 
+                    winningRetailerFilter: '', 
+                    isSinglePresentationMode: isDrk ? true : state.config.isSinglePresentationMode 
+                }, 
+                result: null, 
+                comparisonResults: [] 
+            });
+        }
+
+        function handleTariffChange(e) { 
+            const newTariff = e.target.value;
+
+            if (state.config.isMultiCupsMode) {
+                const savedMultiCupsData = [...state.multiCupsData];
+                const savedCurrentCupsIndex = state.currentCupsIndex;
+                const savedClientName = state.inputs.clientName;
+                const savedCommercialCode = state.inputs.commercialCode;
+                
+                state.inputs = { 
+                    clientName: savedClientName, 
+                    cups: '', 
+                    commercialCode: savedCommercialCode, 
+                    p1_kw: 0, p2_kw: 0, p3_kw: 0, p4_kw: 0, p5_kw: 0, p6_kw: 0, 
+                    p1_kwh: 0, p2_kwh: 0, p3_kwh: 0, p4_kwh: 0, p5_kwh: 0, p6_kwh: 0, 
+                    clientTotalInvoice: 0 
+                };
+                
+                state.comparisonResults = [];
+                state.result = null;
+                state.selectedRankingIds = [];
+                state.currentStudyResult = null;
+                
+                state.config.tariff = newTariff;
+                state.config.segmentFilter = '';
+                state.config.winningTariffId = null;
+
+
+                setState({ 
+                    config: state.config,
+                    inputs: state.inputs,
+                    multiCupsData: savedMultiCupsData,
+                    currentCupsIndex: savedCurrentCupsIndex,
+                });
+                showNotification(`Modelo de tarifa cambiado a ${newTariff}. Listo para el siguiente CUPS.`, 'info');
+
+            } else {
+                resetAllState();
+                setState({ 
+                    config: { ...state.config, tariff: newTariff, segmentFilter: '' }, 
+                    result: null, 
+                    comparisonResults: [] 
+                }); 
+            }
+        }
+        
+        function handleMultiCupsModeChange(e) {
+            const isChecked = e.target.checked;
+            const currentBrand = state.config.brand;
+            const currentTariff = state.config.tariff;
+
+            resetAllState(); 
+            setState({ 
+                config: { ...state.config, isMultiCupsMode: isChecked, brand: currentBrand, tariff: currentTariff },
+                currentCupsIndex: isChecked ? 1 : 0
+            });
+            showNotification(isChecked ? "Modo Multi-CUPS activado. Comience con el CUPS #1." : "Modo simple activado.", 'info');
+        }
+
+        function handleConfigChange(n, v) { 
+            if (n === 'days') v = parseNumericInput(v); 
+            if (n === 'isSinglePresentationMode') v = (v === 'true' || v === true);
+            setState({ config: { ...state.config, [n]: v }, result: null }); 
+        }
+        function handleReportHeaderChange(e) { setState({ config: { ...state.config, reportHeader: e.target.value } }); }
+        function handleRetailerFilterChange(e) { setState({ config: { ...state.config, retailerFilter: e.target.value } }); }
+        function handleSegmentFilterChange(e) { setState({ config: { ...state.config, segmentFilter: e.target.value } }); }
+        
+        function handleRankingRetailerFilterChange(e) { 
+            setState({ config: { ...state.config, rankingRetailerFilter: e.target.value } }); 
+        }
+        
+        function handleWinningRetailerFilterChange(e) { 
+            setState({ config: { ...state.config, winningRetailerFilter: e.target.value, winningTariffId: null } }); 
+        }
+
+
+        // --- LOGICA MULTI-CUPS ---
+        function saveCupsAndProceed() {
+            if (!state.currentStudyResult || !state.inputs.cups) {
+                return showNotification("¡Atención! Debe haber un CUPS calculado y un valor de CUPS ingresado.", 'error');
+            }
+            
+            const cupsData = {
+                cupsIndex: state.currentCupsIndex,
+                clientName: state.inputs.clientName,
+                cups: state.inputs.cups,
+                tariffModel: state.config.tariff,
+                savings: state.currentStudyResult.bestPlan.savings,
+                periodCost: state.currentStudyResult.bestPlan.periodCost,
+                annualCost: state.currentStudyResult.bestPlan.annualCost,
+                plan: state.currentStudyResult.bestPlan, 
+                inputs: { ...state.inputs }
+            };
+            
+            const newMultiCupsData = [...state.multiCupsData, cupsData];
+            
+            const newInputs = { clientName: state.inputs.clientName, cups: '', commercialCode: state.inputs.commercialCode, p1_kw: 0, p2_kw: 0, p3_kw: 0, p4_kw: 0, p5_kw: 0, p6_kw: 0, p1_kwh: 0, p2_kwh: 0, p3_kwh: 0, p4_kwh: 0, p5_kwh: 0, p6_kwh: 0, clientTotalInvoice: 0 };
+
+            setState({
+                multiCupsData: newMultiCupsData,
+                currentCupsIndex: state.currentCupsIndex + 1,
+                inputs: newInputs,
+                currentStudyResult: null, 
+                comparisonResults: [],
+                result: null,
+                config: { 
+                    ...state.config, 
+                    segmentFilter: '', 
+                    winningTariffId: null,
+                    rankingRetailerFilter: '',
+                    winningRetailerFilter: ''
+                }
+            });
+            
+            showNotification(`CUPS ${cupsData.cupsIndex} (${cupsData.cups}) guardado. Listo para CUPS #${state.currentCupsIndex + 1}.`, 'success');
+        }
+
+        function finalizeMultiCups() {
+            let newMultiCupsData = [...state.multiCupsData];
+            
+            if (state.currentStudyResult && state.inputs.cups) {
+                const cupsData = {
+                    cupsIndex: state.currentCupsIndex,
+                    clientName: state.inputs.clientName,
+                    cups: state.inputs.cups,
+                    tariffModel: state.config.tariff,
+                    savings: state.currentStudyResult.bestPlan.savings,
+                    periodCost: state.currentStudyResult.bestPlan.periodCost,
+                    annualCost: state.currentStudyResult.bestPlan.annualCost,
+                    plan: state.currentStudyResult.bestPlan,
+                    inputs: { ...state.inputs }
+                };
+                newMultiCupsData.push(cupsData);
+            } else if (state.multiCupsData.length === 0) {
+                 return showNotification("No hay estudios de CUPS guardados para consolidar.", 'error');
+            }
+            
+            setState({
+                multiCupsData: newMultiCupsData,
+                currentStudyResult: null, 
+                isFinalReportVisible: true
+            });
+            showNotification(`¡Informe consolidado de ${newMultiCupsData.length} CUPS listo!`, 'success');
+        }
+
+        function returnToCupsEntry() {
+            const nextIndex = state.multiCupsData.length + 1;
+            
+            const lastClientName = state.multiCupsData.length > 0 ? state.multiCupsData[0].clientName : '';
+            const lastCommercialCode = state.multiCupsData.length > 0 ? state.multiCupsData[0].inputs.commercialCode : state.inputs.commercialCode;
+            
+            const newInputs = { 
+                clientName: lastClientName, 
+                cups: '', 
+                commercialCode: lastCommercialCode, 
+                p1_kw: 0, p2_kw: 0, p3_kw: 0, p4_kw: 0, p5_kw: 0, p6_kw: 0, 
+                p1_kwh: 0, p2_kwh: 0, p3_kwh: 0, p4_kwh: 0, p5_kwh: 0, p6_kwh: 0, 
+                clientTotalInvoice: 0 
+            };
+            
+            const lastTariffModel = state.multiCupsData[state.multiCupsData.length - 1]?.tariffModel || state.config.tariff;
+
+            setState({
+                isFinalReportVisible: false,
+                currentCupsIndex: nextIndex,
+                inputs: newInputs,
+                currentStudyResult: null,
+                comparisonResults: [],
+                result: null,
+                config: {
+                    ...state.config,
+                    tariff: lastTariffModel,
+                    segmentFilter: '',
+                    winningTariffId: null,
+                    isMultiCupsMode: true
+                }
+            });
+            showNotification(`Continuando estudio. Listo para CUPS #${nextIndex}.`, 'info');
+        }
+
+        // --- LOGICA RANKING ---
+        function getSelectedRetailers(ids, results) {
+            const s = new Set();
+            ids.forEach(id => { const r = results.find(x => x.id === id); if(r) s.add(r.retailer); });
+            return s;
+        }
+        
+        function handleWinningSelection(e) {
+            const id = e.target.value;
+            setState({ config: { ...state.config, winningTariffId: id } });
+
+            if (id !== '' && !state.selectedRankingIds.includes(id)) {
+                let newIds = [...state.selectedRankingIds].filter(x => x !== id); 
+                const t = state.comparisonResults.find(r => r.id === id);
+                if (!t) return;
+                const existing = getSelectedRetailers(newIds, state.comparisonResults);
+                
+                if (!existing.has(t.retailer)) {
+                    if (newIds.length < 5) newIds.push(id);
+                }
+
+                setState({ selectedRankingIds: newIds });
+            }
+        }
+
+        function handleRankingSelection(id, isChecked) {
+            let newIds = [...state.selectedRankingIds];
+            const t = state.comparisonResults.find(r => r.id === id);
+            if (!t) return;
+
+            if (isChecked) {
+                const winningPlan = state.comparisonResults.find(r => r.id === state.config.winningTariffId);
+                if (winningPlan && winningPlan.retailer === t.retailer) {
+                    showNotification(`La comercializadora ${t.retailer} ya es la tarifa ganadora seleccionada.`, 'info');
+                    renderUI(); 
+                    return;
+                }
+                
+                const existing = getSelectedRetailers(newIds, state.comparisonResults);
+                if (existing.has(t.retailer)) { 
+                    showNotification(`Ya existe otra tarifa de ${t.retailer} en el ranking.`, 'info'); 
+                    renderUI(); 
+                    return; 
+                }
+                if (newIds.length < 5) newIds.push(id);
+                else { showNotification("Máximo 5 tarifas permitidas en el ranking.", 'info'); renderUI(); return; }
+            } else {
+                newIds = newIds.filter(x => x !== id);
+            }
+            setState({ selectedRankingIds: newIds });
+        }
+        
+        function resetRankingSelection() {
+            setState({ selectedRankingIds: [] });
+            showNotification("Ranking de opciones reseteado.", "info");
+        }
+
+        // --- CÁLCULOS EXCEL ---
+        const EXCEL_MAP = { retailer: 0, tariffName: 1, tariffModel: 2, p1_en: 4, p2_en: 5, p3_en: 6, p4_en: 7, p5_en: 8, p6_en: 9, en_discount: 10, p1_pow_an: 11, p2_pow_an: 13, p3_pow_an: 13, p4_pow_an: 14, p5_pow_an: 15, p6_pow_an: 16, pow_discount: 17, segment: 19 };
+        
+        function handleExcelUpload(e) {
+            const f = e.target.files[0]; if(!f) return;
+            setState({ isScanning: true, scanStatus: "Procesando..." });
+            const r = new FileReader();
+            r.onload = (e) => {
+                try {
+                    const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+                    const json = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false });
+                    if(json.length < 2) throw new Error("Vacio");
+                    const segs = new Set();
+                    const tarifs = json.slice(1).map((row, i) => {
+                        const s = String(row[EXCEL_MAP.segment]||'').toUpperCase().trim();
+                        const m = String(row[EXCEL_MAP.tariffModel]||'').toUpperCase().trim();
+                        if(s) segs.add(s);
+                        
+                        const isHV = m.includes('3.0TD') || m.includes('6.1TD');
+                        
+                        const t = {
+                            id: `t-${i}-${m}`, retailer: String(row[EXCEL_MAP.retailer]||'Desc').toUpperCase().trim(), name: String(row[EXCEL_MAP.tariffName]||`T${i}`), model: m, segment: s,
+                            pow_an: Array(6).fill(0).map((_,j)=>parseNumericInput(row[EXCEL_MAP.p1_pow_an+j])||0),
+                            en: Array(6).fill(0).map((_,j)=>parseNumericInput(row[EXCEL_MAP.p1_en+j])||0),
+                            pow_discount: parseNumericInput(row[EXCEL_MAP.pow_discount]||0)/100, en_discount: parseNumericInput(row[EXCEL_MAP.en_discount]||0)/100
+                        };
+                        
+                        if (m.includes('2.0TD')) { 
+                             t.pow_an = t.pow_an.slice(0, 2); 
+                             t.en = t.en.slice(0, 3);
+                        }
+
+                        return t;
+                    }).filter(x=>x);
+                    
+                    saveTariffsToStorage(tarifs);
+
+                    setState({ 
+                        uploadedTariffs: tarifs, 
+                        retailerFilterOptions: [...new Set(tarifs.map(t=>t.retailer))], 
+                        segmentFilterOptions: [...segs].sort(), 
+                        isScanning: false, 
+                        comparisonResults: [],
+                        config: { 
+                            ...state.config, 
+                            winningTariffId: null,
+                            lastUploadDate: new Date() 
+                        }
+                    });
+                    showNotification(`${tarifs.length} tarifas importadas.`, 'success');
+                } catch(err) { setState({ isScanning: false }); showNotification("Error al procesar el Excel. Verifica el formato.", 'error'); }
+            };
+            r.readAsArrayBuffer(f);
+        }
+
+        const roundInternal = (n) => Math.round(n * 1000000) / 1000000;
+
+        function calculateTariffCost(t, inp) {
+            const periods = getTariffPeriods(t.model);
+            const pPeriods = periods.p; 
+            const ePeriods = periods.e;
+            let cP = 0, cE = 0;
+
+            for(let i=0; i<pPeriods; i++) {
+                const kw = inp[`p${i+1}_kw`]||0;
+                const annualPrice = t.pow_an[i]||0; 
+                const dailyPriceDiscounted = (annualPrice * (1-(t.pow_discount||0))) / 365;
+                cP += kw * state.config.days * dailyPriceDiscounted;
+            }
+            for(let i=0; i<ePeriods; i++) {
+                const kwh = inp[`p${i+1}_kwh`]||0;
+                const priceDiscounted = (t.en[i]||0) * (1-(t.en_discount||0));
+                cE += kwh * priceDiscounted;
+            }
+            return { power: cP, energy: cE, total: roundInternal(cP + cE) };
+        }
+        
+        function calculateTaxes(b) {
+            const ie = b*0.05; 
+            const iva = (b+ie)*0.21;
+            return { ie: roundInternal(ie), base_imponible: roundInternal(b), iva: roundInternal(iva), total_periodo: roundInternal(b+ie+iva) };
+        }
+
+        function calculate() {
+            if(!state.uploadedTariffs.length || !state.config.segmentFilter) return showNotification("Falta archivo o segmento", 'error');
+            if(state.config.isMultiCupsMode && (!state.inputs.cups || !state.inputs.clientName)) {
+                 return showNotification("En modo Multi-CUPS, se requiere Nombre Cliente y CUPS para el estudio.", 'error');
+            }
+
+            const annF = state.config.days===31 ? 12 : (365/state.config.days);
+            let curTotal = 0, curAnn = 0, curBase = null;
+
+            const t = state.inputs.clientTotalInvoice;
+            if(!t) return showNotification("Falta Total Factura", 'error');
+            curTotal = t; curAnn = roundInternal(t * annF);
+            curBase = { total: t / 1.2705 }; 
+
+            const isDrkBrand = state.config.brand === 'DRK';
+
+            const res = state.uploadedTariffs.filter(t => {
+                const s = t.segment; 
+                const f = state.config.segmentFilter;
+                const m = state.config.tariff; 
+                
+                if(!t.model.toUpperCase().includes(m)) return false;
+
+                if (isDrkBrand && t.retailer.toUpperCase() !== 'DRK') return false; 
+
+                if(['R','P','C','A'].includes(f)) { if(!s.includes(f)) return false; } else if(!s.startsWith(f)) return false;
+                
+                if(!state.config.isMultiCupsMode && state.config.retailerFilter && t.retailer !== state.config.retailerFilter) return false;
+                
+                return true;
+            }).map(t => {
+                const b = calculateTariffCost(t, state.inputs);
+                const tx = calculateTaxes(b.total);
+                const ann = roundInternal(tx.total_periodo * annF);
+                return { ...t, periodCost: tx.total_periodo, annualCost: ann, savings: roundInternal(curAnn - ann), taxes: tx, base_cost: b, tariffDetails: t };
+            }).sort((a,b) => b.savings - a.savings);
+
+            if(!res.length) return showNotification("Sin resultados", 'info');
+            
+            const currentResult = res.find(p => p.id === state.config.winningTariffId) || res[0];
+
+            const newResult = { 
+                current: { period: curTotal, annual: curAnn, details: curBase }, 
+                bestPlan: currentResult
+            };
+
+            const newState = {
+                comparisonResults: res,
+                result: newResult,
+                config: { ...state.config, winningTariffId: state.config.winningTariffId || currentResult.id },
+                selectedRankingIds: state.selectedRankingIds.filter(id => res.some(r => r.id === id)) 
+            };
+
+            if (state.config.isMultiCupsMode) {
+                newState.currentStudyResult = newResult;
+                setState(newState);
+                showNotification(`Calculado CUPS #${state.currentCupsIndex}. ¡Selecciona tu ganador y continúa!`, 'success');
+            } else {
+                setState(newState);
+                showNotification(`Calculado: ${res.length} tarifas.`, 'success');
+            }
+        }
+
+        function getPricesForMail(plan) {
+            const periods = getTariffPeriods(plan.model);
+            const pPeriodsCount = periods.p;
+            const ePeriodsCount = periods.e;
+
+            const getPrices = (t) => {
+                const pp = [], pe = [];
+                for(let i=0; i<pPeriodsCount; i++) pp.push( (t.pow_an[i]*(1-t.pow_discount))/365 ); 
+                for(let i=0; i<ePeriodsCount; i++) pe.push( t.en[i]*(1-t.en_discount) );           
+                return { pp, pe };
+            };
+            
+            const prices = getPrices(plan.tariffDetails); 
+            let priceDetails = '';
+
+            for (let i = 0; i < pPeriodsCount; i++) {
+                priceDetails += `P${i+1} (Potencia - €/kW/día): ${formatCurrency(prices.pp[i], 8)}\n`;
+            }
+            for (let i = 0; i < ePeriodsCount; i++) {
+                priceDetails += `E${i+1} (Energía - €/kWh): ${formatCurrency(prices.pe[i], 8)}\n`;
+            }
+
+            return priceDetails;
+        }
+
+        function generateMailtoLink(plan) {
+            const brand = state.config.brand;
+            const company = brand.toUpperCase(); 
+            
+            const subject = `${company} / ${state.inputs.clientName} / CUPS: ${state.inputs.cups} / Aceptacion de oferta`;
+            const priceDetails = getPricesForMail(plan);
+
+            const body = 
+`Estimados ${company},
+
+Adjunto la documentación necesaria para la gestión del cambio de comercializadora.
+
+--- DATOS DE LA OFERTA ---
+
+Comercializadora y Tarifa: ${plan.retailer} - ${plan.name} (${plan.model})
+Ahorro Anual Estimado: ${formatCurrency(plan.savings, 0)} €
+Total Mensual Estimado: ${formatCurrency(plan.periodCost, 2)} €
+
+--- DETALLE DE PRECIOS (€) ---
+${priceDetails.trim()}
+------------------------------
+
+--- DATOS DEL CLIENTE ---
+
+Nombre: ${state.inputs.clientName}
+CUPS: ${state.inputs.cups}
+Cód. Comercial: ${state.inputs.commercialCode}
+
+
+--- DOCUMENTACIÓN REQUERIDA ---
+
+Para formalizar el contrato, por favor, responde a este email adjuntando:
+1. Foto del DNI/CIF (anverso y reverso).
+2. Última factura (mínimo 3 meses de antigüedad).
+3. Email de contacto para validación.
+4. Teléfono de contacto.
+5. Número de cuenta bancaria (IBAN).
+`;
+            const emailTarget = getEmailTarget(); 
+
+            return `mailto:${emailTarget}?subject=${encodeURIComponent(subject.trim())}&body=${encodeURIComponent(body.trim())}`;
+        }
+        
+        function getUniqueWinningPlans() {
+            const uniquePlans = new Map();
+            const cupsMap = new Map(); 
+
+            state.multiCupsData.forEach(cupsData => {
+                const plan = cupsData.plan;
+                const key = `${plan.retailer}|${plan.name}|${plan.model}`;
+
+                if (!uniquePlans.has(key)) {
+                    uniquePlans.set(key, plan);
+                }
+
+                if (!cupsMap.has(key)) {
+                    cupsMap.set(key, []);
+                }
+                cupsMap.get(key).push(cupsData.cups);
+            });
+
+            return { plans: Array.from(uniquePlans.values()), cupsMap: cupsMap };
+        }
+
+        function generateMultiCupsMailtoLink() {
+            if (state.multiCupsData.length === 0) return '';
+            
+            const { plans, cupsMap } = getUniqueWinningPlans();
+            
+            const totalSavings = state.multiCupsData.reduce((sum, c) => sum + (parseFloat(c.savings) || 0), 0);
+            const clientName = state.multiCupsData[0]?.clientName || 'Cliente Consolidado';
+            const commercialCode = state.multiCupsData[0]?.inputs?.commercialCode || state.inputs.commercialCode;
+            const totalCups = state.multiCupsData.length;
+
+            const brand = state.config.brand;
+            const company = brand.toUpperCase();
+            
+            const subject = `${company} / ${clientName} / ESTUDIO CONSOLIDADO (${totalCups} CUPS) / Aceptacion de oferta`;
+            
+            let priceDetails = '';
+            let cupsRelation = '';
+
+            plans.forEach((plan, index) => {
+                const prices = getPricesForMail(plan);
+                const key = `${plan.retailer}|${plan.name}|${plan.model}`;
+                const associatedCups = cupsMap.get(key) || [];
+
+                priceDetails += `\n--- OFERTA ÚNICA #${index + 1} ---\n`;
+                priceDetails += `Comercializadora: ${plan.retailer}\n`;
+                priceDetails += `Tarifa: ${plan.name} (${plan.model})\n`;
+                
+                priceDetails += `CUPS Asociados: ${associatedCups.join(', ')}\n`;
+                priceDetails += `\n--- DETALLE DE PRECIOS (€) ---\n`;
+                priceDetails += `${prices.trim()}\n`;
+
+                cupsRelation += `CUPS asociados a Oferta #${index + 1} (${plan.retailer} - ${plan.model}):\n`;
+                cupsRelation += associatedCups.map(cups => `- ${cups}`).join('\n') + '\n';
+            });
+
+
+            const body = 
+`Estimados ${company},
+
+Adjunto la documentación necesaria para la gestión del cambio de comercializadora para los ${totalCups} suministros de ${clientName}.
+
+--- RESUMEN CONSOLIDADO ---
+
+Ahorro Anual Total Estimado: ${formatCurrency(totalSavings, 0)} €
+
+--- DATOS DEL CLIENTE ---
+
+Nombre: ${clientName}
+Cód. Comercial: ${commercialCode}
+
+--- DETALLE DE TARIFAS ÚNICAS Y PRECIOS ---
+${priceDetails.trim()}
+
+------------------------------
+--- RELACIÓN DE CUPS POR OFERTA ---
+
+${cupsRelation.trim()}
+
+------------------------------
+--- DOCUMENTACIÓN REQUERIDA (Necesaria por cada CUPS) ---
+
+Para formalizar el contrato, por favor, responde a este email adjuntando por cada suministro (CUPS):
+1. Foto del DNI/CIF (anverso y reverso).
+2. Última factura (mínimo 3 meses de antigüedad).
+3. Email de contacto para validación.
+4. Teléfono de contacto.
+5. Número de cuenta bancaria (IBAN).
+`;
+            const emailTarget = getEmailTarget(); 
+
+            return `mailto:${emailTarget}?subject=${encodeURIComponent(subject.trim())}&body=${encodeURIComponent(body.trim())}`;
+        }
+
+
+        // --- RENDER FUNCTIONS ---
+        function renderIcon(n, c) { return `<i data-lucide="${n}" class="${c}"></i>`; }
+
+        function getDetailedSimulacroData(plan, studyInputs) { 
+            const periods = getTariffPeriods(plan.model);
+            const pPeriods = periods.p; 
+            const ePeriods = periods.e;
+            const days = state.config.days;
+            const inputs = studyInputs; 
+            
+            const getPrices = (t) => {
+                const pp = [], pe = [];
+                for(let i=0; i<t.pow_an.length; i++) pp.push( (t.pow_an[i]*(1-t.pow_discount))/365 );
+                for(let i=0; i<t.en.length; i++) pe.push( t.en[i]*(1-t.en_discount) );
+                return { pp, pe };
+            };
+            const prices = getPrices(plan.tariffDetails);
+
+            const simData = { power: [], energy: [], totals: plan.taxes };
+
+            for (let i = 0; i < pPeriods; i++) {
+                const kw = inputs[`p${i+1}_kw`] || 0;
+                const dailyPrice = prices.pp[i] || 0; 
+                const cost = kw * days * dailyPrice;
+                simData.power.push({
+                    name: `P${i+1}`,
+                    formula: `${formatCurrency(kw, 3)} kW x ${days} días x ${formatCurrency(dailyPrice, 8)} €/kW/día`,
+                    cost: cost,
+                });
+            }
+
+            for (let i = 0; i < ePeriods; i++) {
+                const kwh = inputs[`p${i+1}_kwh`] || 0;
+                const kwhPrice = prices.pe[i] || 0; 
+                const cost = kwh * kwhPrice;
+                simData.energy.push({
+                    name: `E${i+1}`,
+                    formula: `${formatCurrency(kwh, 0)} kWh x ${formatCurrency(kwhPrice, 8)} €/kWh`,
+                    cost: cost,
+                });
+            }
+
+            return simData;
+        }
+
+        function renderReportModal() {
+            if (!state.showReportModal || !state.result || !state.config.winningTariffId) return '';
+            const plan = state.result.bestPlan;
+            
+            const cPrimary = '#7c2d12'; 
+            const cAccent = '#ea580c';  
+            const cBgLight = '#fff7ed'; 
+            const cBorder = '#fdba74';  
+            const cTableHead = '#9a3412'; 
+            const cTextDark = '#111827'; 
+            const cOfferButton = cAccent; 
+
+
+            let ranked = [];
+            const winningPlan = state.result.bestPlan; 
+            const winningPlanId = state.config.winningTariffId;
+            const isSingleMode = state.config.isSinglePresentationMode;
+
+            if(isSingleMode) {
+                ranked = [winningPlan];
+            }
+            else if(state.selectedRankingIds.length > 0) {
+                ranked = state.selectedRankingIds
+                    .map(id => state.comparisonResults.find(r=>r.id===id))
+                    .filter(x=>x);
+                if (winningPlan && ranked.findIndex(p => p.id === winningPlanId) === -1) {
+                    ranked.unshift(winningPlan);
+                }
+                ranked.sort((a,b) => b.savings - a.savings);
+
+            } else {
+                const used = new Set();
+                for(const r of state.comparisonResults) {
+                    if(!used.has(r.retailer)) { used.add(r.retailer); ranked.push(r); }
+                    if(ranked.length >= 5) break;
+                }
+                if (winningPlan && ranked.findIndex(p => p.id === winningPlanId) === -1) {
+                    ranked.unshift(winningPlan);
+                }
+            }
+
+            const maxSav = Math.max(...ranked.map(r=>r.savings), 0.1);
+            
+            const isMultiComparativeMode = !isSingleMode && ranked.length > 1;
+
+            const compareCols = isMultiComparativeMode ? ranked.slice(0, 4) : [winningPlan];
+            
+            const periods = getTariffPeriods(plan.model);
+            const pPeriodsCount = periods.p;
+            const ePeriodsCount = periods.e;
+
+            const getPrices = (t) => {
+                const pp = [], pe = [];
+                for(let i=0; i<pPeriodsCount; i++) pp.push( (t.tariffDetails.pow_an[i]*(1-t.tariffDetails.pow_discount))/365 );
+                for(let i=0; i<ePeriodsCount; i++) pe.push( t.tariffDetails.en[i]*(1-t.tariffDetails.en_discount) );
+                return { pp, pe };
+            };
+
+            let compTableHtml = `<table style="width:100%;border-collapse:collapse;font-size:11px;border:1px solid ${cBorder};margin-bottom:20px;"><thead><tr style="background:${cTableHead};color:white;">
+                <th style="padding:8px;text-align:left">CONCEPTO</th>
+                ${compareCols.map(c => `<th style="padding:8px;text-align:center">${c.retailer}</th>`).join('')}
+            </tr></thead><tbody>`;
+            
+            for(let i=0; i<pPeriodsCount; i++) {
+                compTableHtml += `<tr style="background:${i%2===0?'#fff':cBgLight}"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Potencia P${i+1} (€/kW/día)</td>
+                ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(getPrices(c).pp[i],6)}</td>`).join('')}</tr>`;
+            }
+            for(let i=0; i<ePeriodsCount; i++) {
+                compTableHtml += `<tr style="background:${i%2===0?'#fff':cBgLight};border-top:1px solid #eee"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Energía P${i+1} (€/kWh)</td>
+                ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(getPrices(c).pe[i],6)}</td>`).join('')}</tr>`;
+            }
+            compTableHtml += `<tr style="border-top:2px solid ${cAccent};background:#fff7ed;font-weight:bold"><td style="padding:8px;color:${cAccent}">AHORRO ANUAL</td>
+            ${compareCols.map(c => `<td style="padding:8px;text-align:center;color:${cAccent}">${formatCurrency(c.savings,0)} €</td>`).join('')}</tr>`;
+            compTableHtml += `</tbody></table>`;
+
+            const simData = getDetailedSimulacroData(plan, state.inputs); 
+            const simTotalBase = simData.power.reduce((a,b)=>a+b.cost,0) + simData.energy.reduce((a,b)=>b.cost,0);
+            
+            const mailtoLink = generateMailtoLink(plan);
+
+
+            const simHtml = `
+                <div style="font-size: 12px; color: ${cTextDark};">
+                    <h4 style="font-size: 16px; font-weight: bold; color: ${cPrimary}; text-align: center; margin: 20px 0; border-bottom: 2px solid ${cAccent}; padding-bottom: 5px;">
+                        SIMULACIÓN ${plan.retailer} - ${plan.name}
+                    </h4>
+
+                    <table style="width:100%; border-collapse: collapse; margin-top: 10px;">
+                        <tr style="background:${cPrimary}; color: white; font-weight: bold;"><td colspan="3" style="padding: 6px;">TÉRMINO POTENCIA (Potencia x Días x Precio Diario) - ${pPeriodsCount} Periodos</td></tr>
+                        ${simData.power.map(r => `
+                            <tr style="border-bottom: 1px dashed #ddd; background: #fafafa;">
+                                <td style="padding: 4px 8px; font-weight: bold; width: 10%;">${r.name}</td>
+                                <td style="padding: 4px 8px; font-family: monospace; width: 65%;">${r.formula}</td>
+                                <td style="text-align: right; padding: 4px 8px; width: 25%; font-weight: bold;">${formatCurrency(r.cost, 4)} €</td>
+                            </tr>
+                        `).join('')}
+                        <tr style="font-weight: bold; background: #e2e8f0;"><td colspan="2" style="padding: 6px 8px; text-align: right;">SUBTOTAL POTENCIA</td><td style="text-align: right; padding: 6px 8px;">${formatCurrency(simData.power.reduce((a,b)=>a+b.cost,0), 4)} €</td></tr>
+                        
+                        <tr style="background:${cPrimary}; color: white; font-weight: bold; border-top: 2px solid #fff;"><td colspan="3" style="padding: 6px;">TÉRMINO ENERGÍA (Consumo x Precio €/kWh) - ${ePeriodsCount} Periodos</td></tr>
+                        ${simData.energy.map(r => `
+                            <tr style="border-bottom: 1px dashed #ddd; background: #fafafa;">
+                                <td style="padding: 4px 8px; font-weight: bold;">${r.name}</td>
+                                <td style="padding: 4px 8px; font-family: monospace;">${r.formula}</td>
+                                <td style="text-align: right; padding: 4px 8px; font-weight: bold;">${formatCurrency(r.cost, 4)} €</td>
+                            </tr>
+                        `).join('')}
+                        <tr style="font-weight: bold; background: #e2e8f0;"><td colspan="2" style="padding: 6px 8px; text-align: right;">SUBTOTAL ENERGÍA</td><td style="text-align: right; padding: 6px 8px;">${formatCurrency(simData.energy.reduce((a,b)=>a+b.cost,0), 4)} €</td></tr>
+                        
+                        <tr style="font-weight: bold; background: ${cBgLight}; border-top: 2px solid ${cAccent};"><td colspan="2" style="padding: 6px 8px; text-align: right; color: ${cPrimary};">BASE IMPONIBLE (Potencia + Energía)</td><td style="text-align: right; padding: 6px 8px; color: ${cPrimary};">${formatCurrency(simTotalBase, 4)} €</td></tr>
+                        <tr><td colspan="2" style="padding: 4px 8px; text-align: right;">+ Impuesto Eléctrico (5%)</td><td style="text-align: right; padding: 4px 8px;">${formatCurrency(plan.taxes.ie, 4)} €</td></tr>
+                        <tr><td colspan="2" style="padding: 4px 8px; text-align: right;">+ IVA (21%)</td><td style="text-align: right; padding: 4px 8px;">${formatCurrency(plan.taxes.iva, 4)} €</td></tr>
+                        
+                        <tr style="background:#cc6633; color: white; font-weight: bold; font-size: 14px;">
+                            <td colspan="2" style="padding: 8px; text-align: right;">TOTAL ANUAL ESTIMADO</td>
+                            <td style="text-align: right; padding: 8px;">${formatCurrency(plan.annualCost, 2)} €</td>
+                        </tr>
+                        
+                        <tr style="background:${cAccent}; color: white; font-weight: bold; font-size: 14px;">
+                            <td colspan="2" style="padding: 8px; text-align: right;">TOTAL MES (${state.config.days} DÍAS)</td>
+                            <td style="text-align: right; padding: 8px;">${formatCurrency(plan.periodCost, 2)} €</td>
+                        </tr>
+
+                        <tr style="background:#f0f9ff; border-top: 1px solid #dbeafe; border-bottom: 1px solid #dbeafe;">
+                            <td colspan="3" style="padding: 10px 0; text-align: center;">
+                                <a href="${mailtoLink}" style="display: block; width: 60%; max-w: 300px; margin: 5px auto; text-align: center; background: ${cOfferButton}; color: white; padding: 10px 20px; border-radius: 8px; text-decoration: none; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border: 1px solid ${cOfferButton};">
+                                    QUIERO OFERTA
+                                </a>
+                                
+                                <p style="margin-top: 15px; font-size: 11px; color: #666;">
+                                     Para formalizar la contratación, contacte con: <a href="mailto:${getEmailTarget()}" style="color: ${cPrimary}; text-decoration: underline;">${getEmailTarget()}</a>
+                                </p>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+            `;
+            
+            const rankingContent = isSingleMode ? 
+                `<div style="width:35%;padding-left:15px;border-left:1px solid #eee"><div style="font-size:11px;font-weight:bold;color:${cPrimary};margin-bottom:10px">MODO OFERTA ÚNICA ACTIVO</div><p style="font-size:10px; color:#666">Mostrando solo la simulación de la Tarifa Ganadora para mayor claridad.</p></div>` :
+                `<div style="width:35%;padding-left:15px;border-left:1px solid #eee">
+                    <div style="font-size:11px;font-weight:bold;color:${cPrimary};margin-bottom:10px">RANKING AHORRO</div>
+                    ${ranked.map((r,i) => {
+                        const pct = Math.max((r.savings/maxSav)*100, 10);
+                        const col = r.id===plan.id ? cAccent : '#78716c';
+                        return `<div style="margin-bottom:8px;font-size:10px"><div style="display:flex;justify-content:space-between;margin-bottom:2px"><span>${r.retailer}</span><span>${formatCurrency(r.savings,0)}€</span></div><div style="height:6px;background:#e5e7eb;border-radius:3px"><div style="width:${pct}%;background:${col};height:100%;border-radius:3px"></div></div></div>`;
+                    }).join('')}
+                </div>`;
+            
+            const comparativeSection = isMultiComparativeMode ? `
+                <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:15px;font-size:15px;font-weight:bold;text-transform:uppercase">Comparativa de Ofertas (Top ${compareCols.length})</h3>
+                ${compTableHtml}
+            ` : `
+                <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:15px;font-size:15px;font-weight:bold;text-transform:uppercase">Resumen de Precios de la Oferta Única</h3>
+                ${compTableHtml}
+            `;
+
+
+            return `
+            <div id="reportModal" class="fixed inset-0 bg-black/80 flex justify-center items-center z-50 p-4">
+                <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto flex flex-col">
+                    <div class="flex justify-between p-4 border-b bg-slate-50 sticky top-0 z-20">
+                        <h2 class="font-bold text-slate-700">Informe Comercial V4.50</h2>
+                        <div class="flex gap-2">
+                            <button onclick="copyVisualReport()" class="bg-orange-600 text-white px-3 py-1 rounded font-bold text-sm">COPIAR IMAGEN</button>
+                            <button onclick="setState({showReportModal:false})" class="text-slate-500">✕</button>
+                        </div>
+                    </div>
+                    <div class="p-8 bg-slate-100 overflow-auto">
+                        <div id="visualReportContent" style="font-family:Arial,sans-serif;max-width:800px;margin:0 auto;background:#fff;box-shadow:0 4px 15px rgba(0,0,0,0.1)">
+                            
+                            <div style="background:${cBgLight};padding:30px;border-bottom:4px solid ${cAccent};display:flex;justify-content:space-between">
+                                <div><h1 style="color:${cAccent};font-size:26px;margin:0;font-weight:800">${state.config.brand.toUpperCase()}</h1><p style="color:#666;margin:5px 0 0">${state.config.brand === 'DRK' ? 'Comercializadora' : 'Asesoría Energética'}</p></div>
+                                <div style="text-align:right"><div style="font-size:22px;font-weight:900;color:${cTextDark}">ESTUDIO DE AHORRO</div><div style="color:${cPrimary};font-size:11px;text-transform:uppercase">Comparativa Profesional</div></div>
+                            </div>
+
+                            <div style="padding:15px 30px;border-bottom:1px solid #eee;background:#fcfcfc;font-size:12px;color:#555">
+                                <div style="display:flex;justify-content:space-between;">
+                                    <div>
+                                        <strong>CLIENTE:</strong> ${state.inputs.clientName} | 
+                                        <strong>CUPS:</strong> ${state.inputs.cups} |
+                                        <strong>CÓDIGO COMERCIAL:</strong> ${state.inputs.commercialCode}
+                                    </div>
+                                    <div>
+                                        <strong>GANADORA:</strong> ${plan.retailer} |
+                                        <strong>TARIFA:</strong> ${plan.name} (${plan.model})
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div style="padding:30px">
+                                <div style="display:flex;justify-content:space-between;align-items:center;background:${cBgLight};border:2px solid ${cAccent};border-radius:8px;padding:20px;margin-bottom:30px">
+                                    <div>
+                                        <div style="color:${cPrimary};font-size:12px;font-weight:bold;text-transform:uppercase">MEJOR OPCIÓN: ${plan.retailer}</div>
+                                        <div style="color:${cAccent};font-size:38px;font-weight:800;line-height:1">${formatCurrency(plan.savings,0)} €</div>
+                                        <div style="color:#666;font-size:12px;margin-top:5px">AHORRO ANUAL ESTIMADO</div>
+                                    </div>
+                                    <div style="text-align:right">
+                                        <div style="font-size:12px;color:#666">Nuevo Coste Anual</div>
+                                        <div style="font-size:24px;font-weight:bold;color:${cTextDark}">${formatCurrency(plan.annualCost,2)} €</div>
+                                        <div style="font-size:11px;color:#888">vs. ${formatCurrency(state.result.current.annual,2)} € actuales</div>
+                                    </div>
+                                </div>
+
+                                ${comparativeSection}
+
+                                <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:15px;margin-top:30px;font-size:15px;font-weight:bold;text-transform:uppercase">Simulación Detallada</h3>
+                                <div style="display:flex;gap:20px">
+                                    <div style="flex:1">
+                                        ${simHtml}
+                                    </div>
+                                    ${rankingContent}
+                                </div>
+
+                                <div style="margin-top:40px;border-top:1px solid #eee;padding-top:15px;display:flex;align-items:center;gap:15px">
+                                    <div style="width:36px;height:36px;background:${cPrimary};color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:bold">F</div>
+                                    <div><div style="font-weight:bold;color:${cTextDark};font-size:13px">Fernando Araujo</div><div style="font-size:11px;color:#666">Consultor Energético | Tel: 615 43 94 28</div></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        }
+        
+        function renderMultiCupsReport() {
+            if (!state.isFinalReportVisible || state.multiCupsData.length === 0) {
+                 return `<div class="p-8 text-center text-slate-500">No hay datos de CUPS guardados para el informe consolidado.</div>`;
+            }
+
+            let totalSavings = 0;
+            let totalCurrentAnnualCost = 0;
+            let totalNewAnnualCost = 0;
+            const savingsByTariff = { '2.0TD': 0, '3.0TD': 0, '6.1TD': 0, 'OTHER': 0 }; 
+
+            state.multiCupsData.forEach(cups => {
+                const savings = parseFloat(cups.savings) || 0;
+                const annualCost = parseFloat(cups.annualCost) || 0;
+                
+                totalSavings += savings;
+                totalNewAnnualCost += annualCost;
+                totalCurrentAnnualCost += (annualCost + savings); 
+                
+                const model = getTariffCategory(cups.tariffModel);
+                savingsByTariff[model] += savings;
+            });
+            
+            const mailtoLink = generateMultiCupsMailtoLink();
+            const emailTarget = getEmailTarget();
+
+            const cPrimary = '#7c2d12'; 
+            const cAccent = '#ea580c'; 
+            const cBgLight = '#fff7ed'; 
+            const cTextDark = '#111827'; 
+            const cOfferButton = cPrimary; 
+            
+            const summaryHtml = `
+                <div style="background:${cBgLight};border:2px solid ${cAccent};border-radius:8px;padding:20px;margin-bottom:30px;box-shadow:0 4px 6px -1px rgb(0 0 0 / 0.1);">
+                    <h3 style="color:${cPrimary};font-size:18px;font-weight:bold;margin-bottom:10px;text-align: center;">RESUMEN CONSOLIDADO MULTICUPS (${state.multiCupsData.length} CUPS)</h3>
+                    <div style="display:flex;justify-content:space-around;text-align:center;gap:10px">
+                        <div style="flex:1;padding:10px;border-right:1px solid #eee">
+                            <div style="color:${cTextDark};font-size:20px;font-weight:800">${formatCurrency(totalSavings, 0)} €</div>
+                            <div style="color:${cAccent};font-size:12px;font-weight:bold">AHORRO TOTAL ANUAL</div>
+                        </div>
+                        <div style="flex:1;padding:10px;border-right:1px solid #eee">
+                            <div style="color:${cTextDark};font-size:16px;font-weight:bold">${formatCurrency(totalCurrentAnnualCost, 2)} €</div>
+                            <div style="color:#666;font-size:10px">Coste Anual Actual (Aprox.)</div>
+                        </div>
+                        <div style="flex:1;padding:10px">
+                            <div style="color:${cTextDark};font-size:16px;font-weight:bold">${formatCurrency(totalNewAnnualCost, 2)} €</div>
+                            <div style="color:#666;font-size:10px">Nuevo Coste Anual Total</div>
+                        </div>
+                    </div>
+                    
+                    <div style="margin-top:20px;padding-top:10px;border-top:1px solid #f97316;font-size:12px;background: #ffedd5; padding: 10px; border-radius: 4px;">
+                        <h4 style="font-weight:bold;color:${cPrimary};margin-bottom:5px">Ahorro por Modelo de Tarifa:</h4>
+                        <div style="display:flex;justify-content:space-between;font-size:11px">
+                            <span style="font-weight:bold">2.0TD: ${formatCurrency(savingsByTariff['2.0TD'], 0)} €</span>
+                            <span style="font-weight:bold">3.0TD: ${formatCurrency(savingsByTariff['3.0TD'], 0)} €</span>
+                            <span style="font-weight:bold">6.1TD: ${formatCurrency(savingsByTariff['6.1TD'], 0)} €</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            const orderModel = (a, b) => {
+                const order = { '2.0TD': 1, '3.0TD': 2, '6.1TD': 3, 'OTHER': 4 };
+                const aModel = getTariffCategory(a.tariffModel);
+                const bModel = getTariffCategory(b.tariffModel);
+                
+                return order[aModel] - order[bModel];
+            };
+
+            const sortedCupsData = [...state.multiCupsData].sort(orderModel); 
+
+            let summaryCupsTableHtml = `<table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:20px; border: 1px solid #ddd;">
+                <thead>
+                    <tr style="background:#7c2d12; color:white;">
+                        <th style="padding: 8px; text-align: left;">MODELO</th>
+                        <th style="padding: 8px; text-align: left;">CUPS</th>
+                        <th style="padding: 8px; text-align: right;">AHORRO ANUAL</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+            
+            sortedCupsData.forEach((cups, i) => {
+                const model = getTariffCategory(cups.tariffModel);
+                const rowBg = i % 2 === 0 ? '#f9f9f9' : '#ffffff';
+                summaryCupsTableHtml += `<tr style="background:${rowBg}; border-bottom: 1px solid #eee;">
+                    <td style="padding: 6px; font-weight: bold; color: #333;">${model}</td>
+                    <td style="padding: 6px; font-family: monospace;">${cups.cups}</td>
+                    <td style="padding: 6px; text-align: right; font-weight: bold; color: #ea580c;">${formatCurrency(cups.savings, 0)} €</td>
+                </tr>`;
+            });
+
+            summaryCupsTableHtml += `<tr style="background:#7c2d12; color:white; font-weight:bold; border-top: 2px solid white;">
+                <td colspan="2" style="padding: 8px; text-align: right;">TOTAL AHORRO CONSOLIDADO</td>
+                <td style="padding: 8px; text-align: right; font-size: 14px;">${formatCurrency(totalSavings, 0)} €</td>
+            </tr></tbody></table>`;
+
+
+            const detailsHtml = sortedCupsData.map(cups => {
+                const plan = cups.plan;
+                
+                const simData = getDetailedSimulacroData(plan, cups.inputs); 
+                const simTotalBase = simData.power.reduce((a,b)=>a+b.cost,0) + simData.energy.reduce((a,b)=>b.cost,0);
+
+                const periods = getTariffPeriods(plan.tariffModel);
+                const pPeriodsCount = periods.p;
+                const ePeriodsCount = periods.e;
+
+                const getPrices = (t) => {
+                    const pp = [], pe = [];
+                    for(let i=0; i<pPeriodsCount; i++) pp.push( (t.plan.tariffDetails.pow_an[i]*(1-t.plan.tariffDetails.pow_discount))/365 );
+                    for(let i=0; i<ePeriodsCount; i++) pe.push( t.plan.tariffDetails.en[i]*(1-t.plan.tariffDetails.en_discount) );
+                    return { pp, pe };
+                };
+                const prices = getPrices(cups);
+
+                
+                let pricesHtml = `<table style="width:100%; border-collapse: collapse; font-size: 10px; margin-top: 5px;">
+                    <tr style="background:#f3f4f6; font-weight:bold"><td style="padding:4px">CONCEPTO</td><td style="padding:4px; text-align:right">PRECIO (€)</td></tr>`;
+                
+                for (let i = 0; i < pPeriodsCount; i++) {
+                    pricesHtml += `<tr><td style="padding:3px; color:${cPrimary}">Potencia P${i+1} (€/kW/día)</td><td style="padding:3px; text-align:right">${formatCurrency(prices.pp[i], 8)}</td></tr>`;
+                }
+                for (let i = 0; i < ePeriodsCount; i++) {
+                    pricesHtml += `<tr><td style="padding:3px; color:${cPrimary}">Energía P${i+1} (€/kWh)</td><td style="padding:3px; text-align:right">${formatCurrency(prices.pe[i], 8)}</td></tr>`;
+                }
+                pricesHtml += `</table>`;
+                
+                const simulacroHtml = `
+                    <table style="width:100%; border-collapse: collapse; font-size: 10px; margin-top: 10px;">
+                        <tr style="background:#7c2d12; color:white; font-weight: bold;"><td colspan="3" style="padding: 4px;">TÉRMINO POTENCIA (${simData.power.length}P)</td></tr>
+                        ${simData.power.map(r => `
+                            <tr style="border-bottom: 1px dashed #eee; background: #fafafa;">
+                                <td style="padding: 2px 4px; width: 10%;">${r.name}</td>
+                                <td style="padding: 2px 4px; font-family: monospace; width: 60%;">${r.formula}</td>
+                                <td style="text-align: right; padding: 2px 4px; width: 30%;">${formatCurrency(r.cost, 4)} €</td>
+                            </tr>
+                        `).join('')}
+                        
+                        <tr style="background:#7c2d12; color:white; font-weight: bold;"><td colspan="3" style="padding: 4px;">TÉRMINO ENERGÍA (${simData.energy.length}E)</td></tr>
+                        ${simData.energy.map(r => `
+                            <tr style="border-bottom: 1px dashed #eee; background: #fafafa;">
+                                <td style="padding: 2px 4px;">${r.name}</td>
+                                <td style="padding: 2px 4px; font-family: monospace;">${r.formula}</td>
+                                <td style="text-align: right; padding: 2px 4px;">${formatCurrency(r.cost, 4)} €</td>
+                            </tr>
+                        `).join('')}
+                        
+                        <tr style="font-weight: bold; background: #e2e8f0;"><td colspan="2" style="padding: 4px 8px; text-align: right; color: ${cPrimary};">BASE IMPONIBLE (P+E)</td><td style="text-align: right; padding: 4px 8px; color: ${cPrimary};">${formatCurrency(simTotalBase, 4)} €</td></tr>
+                        <tr style="font-weight: bold; background: #ffedd5;"><td colspan="2" style="padding: 4px 8px; text-align: right;">TOTAL MES OFERTA</td><td style="text-align: right; padding: 4px 8px; color: ${cAccent}; font-size: 11px;">${formatCurrency(cups.periodCost, 2)} €</td></tr>
+                    </table>
+                `;
+
+                return `
+                    <div style="border: 1px solid #fdba74; border-radius: 8px; padding: 15px; margin-bottom: 20px; background: #fff;">
+                        <h4 style="font-size:14px; font-weight:bold; color:${cAccent}; border-bottom:1px dashed #f97316; padding-bottom:5px; margin-bottom:10px;">
+                            CUPS ${cups.cupsIndex}: ${cups.cups} (${cups.tariffModel}) - ${cups.plan.retailer}
+                        </h4>
+                        
+                        <div style="display:flex; gap: 20px;">
+                            <div style="width: 35%;">
+                                <div style="font-weight:bold; color:${cPrimary}; margin-bottom: 5px;">Tarifa / Precios Ganadores</div>
+                                ${pricesHtml}
+                            </div>
+                            <div style="flex: 1; border-left: 1px dashed #f5f5f5; padding-left: 20px;">
+                                <div style="font-weight:bold; color:${cPrimary}; margin-bottom: 5px;">Simulación Detallada (Cálculos)</div>
+                                ${simulacroHtml}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            const offerButtonHtml = `
+                <div style="margin-top:40px; margin-bottom: 20px; background:#f0f9ff; border: 1px solid #bae6fd; padding: 15px; border-radius: 8px; text-align: center;">
+                    
+                    <p style="font-size: 10px; color: #666; margin-bottom: 10px;">
+                        *Al hacer clic, se abrirá automáticamente su gestor de correo para enviar la solicitud de las ${state.multiCupsData.length} instalaciones.
+                    </p>
+                    
+                    <a href="${mailtoLink}" style="display: inline-block; max-width: 400px; margin: 0 auto; text-align: center; background: ${cOfferButton}; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 14px; border: 1px solid ${cOfferButton};">
+                        ACEPTAR OFERTA CONSOLIDADA (INICIAR CONTRATACIÓN)
+                    </a>
+                    
+                    <p style="margin-top: 15px; font-size: 11px; color: #666;">
+                         Para formalizar la contratación, contacte con: <a href="mailto:${emailTarget}" style="color: ${cPrimary}; text-decoration: underline;">${emailTarget}</a>
+                    </p>
+                </div>
+            `;
+
+            return `
+                <div class="fixed inset-0 bg-black/80 flex justify-center items-center z-50 p-4">
+                    <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto flex flex-col">
+                        <div class="flex justify-between p-4 border-b bg-slate-50 sticky top-0 z-20">
+                            <h2 class="font-bold text-slate-700">Informe Consolidado Multi-CUPS V4.50</h2>
+                            <div class="flex gap-2">
+                                <button onclick="copyVisualReport()" class="bg-orange-600 text-white px-3 py-1 rounded font-bold text-sm">COPIAR IMAGEN</button>
+                                <button onclick="resetAllState(); renderUI();" class="text-slate-500">✕</button>
+                            </div>
+                        </div>
+                        <div class="p-8 bg-slate-100 overflow-auto">
+                            <div id="visualReportContent" style="font-family:Arial,sans-serif;max-width:900px;margin:0 auto;background:#fff;box-shadow:0 4px 15px rgba(0,0,0,0.1)">
+                                
+                                <div style="background:${cBgLight};padding:30px;border-bottom:4px solid ${cAccent};display:flex;justify-content:space-between">
+                                    <div><h1 style="color:${cAccent};font-size:26px;margin:0;font-weight:800">${state.config.brand.toUpperCase()}</h1><p style="color:#666;margin:5px 0 0">ASESORÍA ENERGÉTICA MULTICUPS</p></div>
+                                    <div style="text-align:right"><div style="font-size:22px;font-weight:900;color:${cTextDark}">INFORME CONSOLIDADO</div><div style="color:${cPrimary};font-size:11px;text-transform:uppercase">Comparativa Profesional</div></div>
+                                </div>
+
+                                <div style="padding:15px 30px;border-bottom:1px solid #eee;background:#fcfcfc;font-size:12px;color:#555">
+                                    <div style="display:flex;justify-content:space-between;">
+                                        <div>
+                                            <strong>CLIENTE:</strong> ${state.multiCupsData[0]?.clientName || 'Cliente Consolidado'} | 
+                                            <strong>CÓDIGO COMERCIAL:</strong> ${state.multiCupsData[0]?.plan?.tariffDetails?.commercialCode || state.inputs.commercialCode || 'N/A'}
+                                        </div>
+                                        <div>
+                                            <strong>TOTAL CUPS ANALIZADOS:</strong> ${state.multiCupsData.length}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div style="padding:30px">
+                                    ${summaryHtml}
+
+                                    <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:15px;font-size:15px;font-weight:bold;text-transform:uppercase">Resumen de Ahorro por Modelo de Tarifa</h3>
+                                    ${summaryCupsTableHtml}
+                                    
+                                    <h3 style="color:${cPrimary};border-bottom:2px solid ${cAccent};padding-bottom:5px;margin-bottom:20px;margin-top:30px;font-size:15px;font-weight:bold;text-transform:uppercase">Detalle Individual por Suministro (CUPS)</h3>
+                                    ${detailsHtml}
+
+                                    ${offerButtonHtml}
+
+                                    <div style="margin-top:40px;border-top:1px solid #eee;padding-top:15px;display:flex;align-items:center;gap:15px">
+                                        <div style="width:36px;height:36px;background:${cPrimary};color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:bold">F</div>
+                                        <div><div style="font-weight:bold;color:${cTextDark};font-size:13px">Fernando Araujo</div><div style="font-size:11px;color:#666">Consultor Energético | Tel: 615 43 94 28</div></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex justify-center p-4 border-t bg-slate-50 sticky bottom-0 z-20 gap-4">
+                            <button onclick="returnToCupsEntry()" class="bg-blue-600 text-white px-5 py-2 rounded font-bold text-sm shadow-lg hover:bg-blue-700 flex items-center gap-2">
+                                ${renderIcon('plus-circle', 'w-4 h-4')} AÑADIR MÁS CUPS
+                            </button>
+                            <button onclick="copyVisualReport()" class="bg-orange-600 text-white px-5 py-2 rounded font-bold text-sm shadow-lg hover:bg-orange-700">
+                                COPIAR INFORME CONSOLIDADO
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderUI() {
+            const mainGrid = document.getElementById('main-content-grid');
+            const multiCupsReportSection = document.getElementById('multi-cups-report-section');
+            const headerToggle = document.getElementById('multi-cups-toggle');
+            
+            if (multiCupsReportSection) multiCupsReportSection.innerHTML = state.isFinalReportVisible ? renderMultiCupsReport() : '';
+
+            if (state.isFinalReportVisible) {
+                if (mainGrid) mainGrid.classList.add('hidden'); 
+                if (headerToggle) headerToggle.disabled = true; 
+            } else {
+                if (mainGrid) mainGrid.classList.remove('hidden'); 
+                if (headerToggle) headerToggle.disabled = false;
+                
+                const editor = document.getElementById('drk-editor');
+                if (editor) editor.innerHTML = renderTariffDatabaseSection();
+                
+                const clientInputs = document.getElementById('client-inputs-section');
+                if (clientInputs) clientInputs.innerHTML = renderClientInputs();
+                
+                const resultsSection = document.getElementById('results-section');
+                if (resultsSection) resultsSection.innerHTML = renderResults();
+                
+                const modalContainer = document.getElementById('modal-container');
+                if (modalContainer) modalContainer.innerHTML = state.showReportModal ? renderReportModal() : '';
+            }
+            
+            if (window.lucide) window.lucide.createIcons();
+            
+            const brandElement = document.getElementById('main-brand');
+            if (brandElement) {
+                brandElement.textContent = state.config.brand;
+            }
+        }
+
+        function renderTariffDatabaseSection() {
+            const hasData = state.uploadedTariffs.length > 0;
+            const allResults = state.comparisonResults;
+            const selectedRetailers = getSelectedRetailers(state.selectedRankingIds, allResults);
+            
+            const lastUploadDate = state.config.lastUploadDate;
+            const uploadDateHtml = lastUploadDate 
+                ? `(Última carga: ${lastUploadDate.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })})` 
+                : '(No hay tarifas cargadas)';
+
+            // Nuevo indicador de modo de persistencia
+            const persistenceMode = isFirebaseReady ? 
+                `<span class="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full flex items-center gap-1">${renderIcon('cloud','w-3 h-3')} Nube (Firebase)</span>` :
+                `<span class="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded-full flex items-center gap-1">${renderIcon('hard-drive','w-3 h-3')} Local (LocalStorage)</span>`;
+
+
+            const currentTariffModel = state.config.tariff;
+            const filteredSegmentOptions = [...new Set(state.uploadedTariffs
+                .filter(t => t.model.toUpperCase().includes(currentTariffModel))
+                .map(t => t.segment)
+            )].sort();
+
+            const winningPlan = allResults.find(p => p.id === state.config.winningTariffId);
+            const winningSavings = winningPlan ? winningPlan.savings : Infinity;
+
+            const isDrkBrand = state.config.brand === 'DRK';
+            const isSingleMode = state.config.isSinglePresentationMode;
+            
+            const winningRetailerOptions = [...new Set(allResults.map(r => r.retailer))].sort();
+
+
+            const filteredWinningResults = allResults.filter(p => {
+                if (state.config.winningRetailerFilter && p.retailer !== state.config.winningRetailerFilter) return false;
+                if (!p.model.toUpperCase().includes(currentTariffModel)) return false;
+                return true;
+            });
+            
+            const rankingRetailerOptions = [...new Set(allResults.map(r => r.retailer))].sort();
+
+            const filteredRankingResults = allResults.filter(p => {
+                if (state.config.rankingRetailerFilter && p.retailer !== state.config.rankingRetailerFilter) return false;
+                if (!p.model.toUpperCase().includes(currentTariffModel)) return false;
+                
+                if (winningPlan && p.savings > winningSavings) {
+                    return false;
+                }
+                
+                return true;
+            });
+            
+            const isCalculateDisabled = !hasData || !state.config.segmentFilter;
+            const calculateButtonText = hasData 
+                ? (state.config.segmentFilter ? 'RE-CALCULAR Y FILTRAR' : 'SELECCIONAR SEGMENTO') 
+                : 'CARGAR EXCEL DE TARIFAS';
+
+            const isMultiCups = state.config.isMultiCupsMode;
+            
+            return `<div class="bg-white p-4 rounded-xl shadow-lg border-2 border-orange-500/20 mb-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="font-bold text-orange-700 flex gap-2">${renderIcon('database','w-5 h-5')} Base de Datos y Filtros</h3>
+                    <div class="flex flex-col items-end gap-1">
+                        ${persistenceMode}
+                        <span class="text-xs bg-slate-100 px-2 py-1 rounded">${state.uploadedTariffs.length} Tarifas ${uploadDateHtml}</span>
+                    </div>
+                </div>
+                
+                <!-- SECCIÓN DE CARGA Y FILTROS -->
+                ${!hasData ? `<div class="relative group"><input type="file" accept=".xlsx,.csv" onchange="handleExcelUpload(event)" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"><button class="w-full bg-orange-600 text-white py-2 rounded font-bold flex justify-center gap-2">${state.isScanning?renderIcon('loader','animate-spin'):renderIcon('upload','')} ${calculateButtonText}</button></div>` : 
+                `<div class="grid md:grid-cols-4 gap-4 items-end">
+                    ${isMultiCups ? 
+                        `
+                            <div class="col-span-2">
+                                <label class="text-xs font-bold text-slate-500">Segmento (${currentTariffModel})</label>
+                                <select onchange="handleSegmentFilterChange(event)" class="w-full p-2 border rounded font-bold text-orange-800">
+                                    <option value="" disabled ${!state.config.segmentFilter ? 'selected' : ''}>Seleccionar...</option>
+                                    ${filteredSegmentOptions.map(s=>`<option value="${s}" ${state.config.segmentFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
+                                </select>
+                            </div>
+                            <button onclick="calculate()" class="w-full bg-orange-600 text-white py-2 rounded font-bold shadow hover:bg-orange-700 col-span-2 ${isCalculateDisabled ? 'opacity-50 cursor-not-allowed bg-orange-400 hover:bg-orange-400' : ''}" ${isCalculateDisabled ? 'disabled' : ''}>
+                                ${calculateButtonText}
+                            </button>
+                        `
+                        :
+                        `
+                            <div>
+                                <label class="text-xs font-bold text-slate-500">Segmento (${currentTariffModel})</label>
+                                <select onchange="handleSegmentFilterChange(event)" class="w-full p-2 border rounded font-bold text-orange-800">
+                                    <option value="" disabled ${!state.config.segmentFilter ? 'selected' : ''}>Seleccionar...</option>
+                                    ${filteredSegmentOptions.map(s=>`<option value="${s}" ${state.config.segmentFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="text-xs font-bold text-slate-500">Cía (Opcional)</label>
+                                <select onchange="handleRetailerFilterChange(event)" class="w-full p-2 border rounded">
+                                    <option value="">Todas</option>
+                                    ${state.retailerFilterOptions.map(r=>`<option value="${r}" ${state.config.retailerFilter === r ? 'selected' : ''}>${r}</option>`).join('')}
+                                </select>
+                            </div>
+                            <button onclick="calculate()" class="w-full bg-orange-600 text-white py-2 rounded font-bold shadow hover:bg-orange-700 md:col-span-2 ${isCalculateDisabled ? 'opacity-50 cursor-not-allowed bg-orange-400 hover:bg-orange-400' : ''}" ${isCalculateDisabled ? 'disabled' : ''}>
+                                ${calculateButtonText}
+                            </button>
+                        `
+                    }
+                </div>
+                <div class="mt-4 border-t pt-4 grid grid-cols-2 gap-4">
+                     <div class="relative group">
+                        <input type="file" accept=".xlsx,.csv" onchange="handleExcelUpload(event)" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+                        <button class="w-full bg-slate-200 text-slate-800 py-2 rounded font-bold flex justify-center gap-2 hover:bg-slate-300">
+                            ${renderIcon('upload','w-5 h-5')} SUBIR Y REEMPLAZAR TARIFAS (Excel)
+                        </button>
+                    </div>
+                     <button onclick="deleteTariffsFromStorage()" class="w-full bg-red-500 text-white py-2 rounded font-bold flex justify-center gap-2 hover:bg-red-600 ${!hasData ? 'opacity-50 cursor-not-allowed' : ''}" ${!hasData ? 'disabled' : ''}>
+                        ${renderIcon('trash-2','w-5 h-5')} BORRAR TARIFAS GUARDADAS
+                    </button>
+                </div>
+                `}
+                
+                <!-- SECCIÓN DE SELECCIÓN DE GANADOR Y RANKING -->
+                ${state.comparisonResults.length > 0 ? `
+                <div class="mt-6 pt-4 border-t border-slate-200 space-y-4">
+                    
+                    <h4 class="font-bold text-slate-700 flex gap-2">${renderIcon('award','w-4 h-4 text-orange-600')} 1. Seleccionar Tarifa Ganadora (Ganadora: ${winningPlan ? winningPlan.retailer : 'N/A'})</h4>
+                    
+                    <div class="flex items-center gap-2">
+                        <label class="text-xs font-bold text-slate-500">Filtrar Cía Ganadora:</label>
+                        <select onchange="handleWinningRetailerFilterChange(event)" class="p-1 border rounded text-sm flex-grow" value="${state.config.winningRetailerFilter}">
+                            <option value="">Mostrar Todas</option>
+                            ${winningRetailerOptions.map(r=>`<option value="${r}" ${state.config.winningRetailerFilter === r ? 'selected' : ''}>${r}</option>`).join('')}
+                        </select>
+                    </div>
+
+                    <select onchange="handleWinningSelection(event)" class="w-full p-2 border border-orange-400 rounded font-bold text-slate-800 shadow-md bg-orange-50" value="${state.config.winningTariffId || ''}">
+                        <option value="" disabled ${!state.config.winningTariffId ? 'selected' : ''}>-- ELEGIR TARIFAS GANADORA --</option>
+                        ${filteredWinningResults.map(p => {
+                            return `<option value="${p.id}" ${state.config.winningTariffId === p.id ? 'selected' : ''}>${p.retailer} | ${p.name} (Ahorro: ${formatCurrency(p.savings,0)}€) (${p.model})</option>`;
+                        }).join('')}
+                    </select>
+
+                    ${isDrkBrand || state.config.isMultiCupsMode ? 
+                        `<div class="pt-2 text-sm text-slate-500 font-medium">Modo ${isDrkBrand ? 'DRK ENERGÍA' : 'MULTI-CUPS'}: Oferta única forzada.</div>` :
+                        `<div class="flex items-center justify-between pt-2">
+                            <h4 class="font-bold text-slate-700 flex gap-2">${renderIcon('list-checks','w-4 h-4 text-slate-600')} 2. Ranking de Opciones (Max 5 / 1 por Cía)</h4>
+                            <button onclick="resetRankingSelection()" class="text-xs text-red-500 hover:text-red-700 font-bold p-1 rounded-md flex items-center gap-1 border border-red-300 bg-red-50">
+                                ${renderIcon('rotate-ccw', 'w-3 h-3')} Resetear Ranking
+                            </button>
+                        </div>
+                        
+                        <div class="flex items-center gap-2">
+                            <label class="text-xs font-bold text-slate-500">Filtrar Cía:</label>
+                            <select onchange="handleRankingRetailerFilterChange(event)" class="p-1 border rounded text-sm flex-grow" value="${state.config.rankingRetailerFilter}">
+                                <option value="">Mostrar Todas</option>
+                                ${rankingRetailerOptions.map(r=>`<option value="${r}" ${state.config.rankingRetailerFilter === r ? 'selected' : ''}>${r}</option>`).join('')}
+                            </select>
+                        </div>
+
+                        <div class="max-h-32 overflow-y-auto custom-scrollbar border rounded p-2 bg-slate-50 grid grid-cols-1 md:grid-cols-2 gap-2">
+                            ${filteredRankingResults.map(p => {
+                                const isSelected = state.selectedRankingIds.includes(p.id);
+                                const isWinningRetailer = winningPlan && winningPlan.retailer === p.retailer && !isSelected;
+                                const isRetailerSelected = selectedRetailers.has(p.retailer) && !isSelected;
+                                const isMaxedOut = state.selectedRankingIds.length >= 5 && !isSelected;
+                                const isDisabled = isRetailerSelected || isMaxedOut || isWinningRetailer;
+                                const displayAsWinning = winningPlan && p.id === winningPlan.id;
+
+                                return `<label class="flex items-center gap-2 text-xs p-1 hover:bg-white rounded ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}">
+                                    <input type="checkbox" onchange="handleRankingSelection('${p.id}',this.checked)" 
+                                        ${isSelected?'checked':''} 
+                                        ${isDisabled?'disabled':''}
+                                        class="rounded text-orange-600"> 
+                                    <span class="truncate font-medium text-slate-70um ${displayAsWinning ? 'font-bold text-orange-800' : ''}">${p.retailer} - ${p.name} (Ahorro: ${formatCurrency(p.savings,0)}€) ${displayAsWinning ? '(GANADORA)' : ''}</span>
+                                </label>`;
+                            }).join('')}
+                        </div>`
+                    }
+                </div>` : ''}
+            </div>`;
+        }
+
+        function renderComparisonModeSelector() { return ''; } 
+
+        function renderClientInputs() {
+            const currentTariffModel = state.config.tariff;
+            const rows = [1,2,3,4,5,6].map(i => {
+                const is20 = currentTariffModel === '2.0TD';
+                const pDis = is20 && i > 2; 
+                const eDis = is20 && i > 3; 
+                
+                if (is20 && i > 3) return ''; 
+
+                return `<div class="grid grid-cols-12 gap-2 text-sm mb-1 items-center">
+                    <div class="col-span-1 font-bold text-slate-500 text-center bg-slate-100 rounded">P${i}</div>
+                    <div class="col-span-5"><input type="number" step="0.01" oninput="handleInputRaw('p${i}_kw', this.value)" onblur="handleInputBlur('p${i}_kw', this.value)" class="w-full p-1 border rounded outline-none focus:border-orange-500 ${pDis?'bg-slate-50':''}" placeholder="kW" value="${state.inputs[`p${i}_kw`]||''}" ${pDis?'disabled':''}></div>
+                    <div class="col-span-6"><input type="number" step="1" oninput="handleInputRaw('p${i}_kwh', this.value)" onblur="handleInputBlur('p${i}_kwh', this.value)" class="w-full p-1 border rounded outline-none focus:border-orange-500 ${eDis?'bg-slate-50':''}" placeholder="kWh" value="${state.inputs[`p${i}_kwh`]||''}" ${eDis?'disabled':''}></div>
+                </div>`;
+            }).join('');
+            
+            const codeInput = `<div class="mb-4">
+                <label class="text-xs font-bold text-slate-500">CÓDIGO COMERCIAL</label>
+                <input type="text" oninput="handleInputRaw('commercialCode', this.value)" onblur="handleInputBlur('commercialCode', this.value)" class="w-full p-2 text-lg font-bold border rounded focus:border-orange-500" placeholder="Ej: F.ARAUJO.001" value="${state.inputs.commercialCode}">
+            </div>`;
+
+            const clientDataCard = `<div class="bg-white p-4 rounded-xl shadow mb-6">
+                <h3 class="font-bold text-slate-700 mb-3 flex gap-2">Datos de Cliente ${state.config.isMultiCupsMode ? `(CUPS #${state.currentCupsIndex})` : ''}</h3>
+                <input type="text" placeholder="Nombre Cliente" class="w-full border-b p-2 outline-none mb-2 font-bold text-slate-700" oninput="handleInputRaw('clientName',this.value,'inputs')" onblur="handleInputBlur('clientName',this.value,'inputs')" value="${state.inputs.clientName}">
+                <input type="text" placeholder="CUPS" class="w-full border-b p-2 outline-none text-xs uppercase" oninput="handleInputRaw('cups',this.value,'inputs')" onblur="handleInputBlur('cups',this.value,'inputs')" value="${state.inputs.cups}">
+            </div>`;
+
+
+            return `
+            ${clientDataCard}
+            <div class="bg-white p-4 rounded-xl shadow mb-6">
+                <h3 class="font-bold text-slate-700 mb-3 flex gap-2">${renderIcon('zap','w-4 h-4 text-yellow-500')} Datos Factura (${currentTariffModel})</h3>
+            
+                <div class="mb-4"><label class="text-xs font-bold text-slate-500">Total Factura (€)</label><input type="number" step="0.01" oninput="handleInputRaw('clientTotalInvoice', this.value)" onblur="handleInputBlur('clientTotalInvoice', this.value)" class="w-full p-2 text-lg font-bold border rounded focus:border-orange-500" placeholder="0.00" value="${state.inputs.clientTotalInvoice||''}"></div>
+            
+                ${codeInput}
+
+                <div class="grid grid-cols-12 gap-2 text-xs font-bold text-slate-400 mb-1 text-center"><div class="col-span-1"></div><div class="col-span-5">Potencia (kW)</div><div class="col-span-6">Energía (kWh)</div></div>${rows}
+            </div>`;
+        }
+
+        function renderResults() {
+            if(!state.result || !state.config.winningTariffId) return '';
+            const plan = state.result.bestPlan;
+            const isReady = !!plan && !!state.result.current;
+            
+            if (state.config.isMultiCupsMode) {
+                if (!state.currentStudyResult) return ''; 
+                
+                const nextCupsButton = `<button 
+                    onclick="saveCupsAndProceed()" 
+                    class="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded shadow-lg flex justify-center gap-2"
+                >
+                    ${renderIcon('arrow-right', 'w-5 h-5')} SIGUIENTE CUPS (${state.multiCupsData.length + 1})
+                </button>`;
+                
+                const finalizeButton = `<button 
+                    onclick="finalizeMultiCups()" 
+                    class="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded shadow-lg flex justify-center gap-2"
+                >
+                    ${renderIcon('flag', 'w-5 h-5')} FINALIZAR Y CONSOLIDAR
+                </button>`;
+
+                return `<div class="bg-slate-900 text-white rounded-xl shadow-xl p-6 relative overflow-hidden">
+                    <div class="relative z-10">
+                        <div class="flex justify-between items-start mb-4">
+                            <div>
+                                <div class="text-orange-500 font-bold text-sm tracking-wider uppercase">Resultado CUPS #${state.currentCupsIndex}</div>
+                                <h2 class="text-xl font-bold">${plan.retailer} | ${plan.name}</h2>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-3xl font-bold">${formatCurrency(plan.savings,0)}€</div>
+                                <div class="text-xs text-orange-400 font-bold uppercase">Ahorro Estimado</div>
+                            </div>
+                        </div>
+                        <div class="flex gap-4 mt-4">
+                            ${nextCupsButton}
+                            ${finalizeButton}
+                        </div>
+                        
+                        <p class="text-xs text-slate-400 mt-4">
+                            Suministros guardados: ${state.multiCupsData.length}. Pulse "Siguiente CUPS" para guardar este estudio.
+                        </p>
+                    </div>
+                </div>`;
+            }
+            
+            return `<div class="bg-slate-900 text-white rounded-xl shadow-xl p-6 relative overflow-hidden">
+                <div class="absolute top-0 right-0 p-4 opacity-10">${renderIcon('award','w-32 h-32')}</div>
+                <div class="relative z-10">
+                    <div class="flex justify-between items-start mb-4">
+                        <div><div class="text-orange-500 font-bold text-sm tracking-wider uppercase">Tarifa Ganadora Seleccionada</div><h2 class="text-2xl font-bold">${plan.retailer} <span class="font-normal text-slate-400">| ${plan.name}</span></h2></div>
+                        <div class="text-right"><div class="text-3xl font-bold">${formatCurrency(plan.savings,0)}€</div><div class="text-xs text-orange-400 font-bold uppercase">Ahorro Estimado</div></div>
+                    </div>
+                    <button 
+                        onclick="setState({showReportModal:true})" 
+                        class="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 rounded shadow-lg flex justify-center gap-2 ${!isReady ? 'opacity-50 cursor-not-allowed' : ''}"
+                        ${!isReady ? 'disabled' : ''}
+                    >
+                        ${renderIcon('file-text','w-5 h-5')} GENERAR INFORME DETALLADO
+                    </button>
+                </div>
+            </div>`;
+        }
+
+        function showNotification(m, t) {
+            const d = document.createElement('div');
+            d.className = `p-4 rounded shadow-lg text-white mb-2 flex gap-2 ${t==='error'?'bg-red-600':(t==='info'?'bg-orange-600':'bg-slate-800')}`;
+            d.innerHTML = `<span>${m}</span>`;
+            document.getElementById('notification-container').appendChild(d);
+            setTimeout(()=>d.remove(), 3000);
+        }
+        function copyVisualReport() {
+            const contentId = state.isFinalReportVisible ? 'visualReportContent' : 'visualReportContent'; 
+            const r = document.createRange(); 
+            const contentElement = document.getElementById(contentId);
+            
+            if (contentElement) {
+                r.selectNode(contentElement);
+                window.getSelection().removeAllRanges(); 
+                window.getSelection().addRange(r);
+                document.execCommand('copy'); 
+                window.getSelection().removeAllRanges();
+                showNotification("Copiado al portapapeles", "success");
+            } else {
+                 showNotification("No hay contenido para copiar.", "error");
+            }
+        }
+
+        window.onload = initializeApp;
+    </script>
+</head>
+<body>
+    <div id="multi-cups-report-section"></div>
+
+    <div id="main-content-grid" class="min-h-screen p-4 max-w-5xl mx-auto">
+        <header class="flex justify-between items-center mb-6">
+            <h1 class="text-2xl font-black text-slate-800 tracking-tight">
+                <span id="main-brand" class="text-orange-600">${state.config.brand}</span> 
+                <span class="text-slate-400 font-light text-lg">| Comparador V4.50</span>
+            </h1>
+            <div class="flex gap-4 items-center">
+                
+                <label class="flex items-center space-x-2 text-xs font-medium text-slate-700">
+                    <input type="checkbox" id="multi-cups-toggle"
+                           onchange="handleMultiCupsModeChange(event)" 
+                           ${state.config.isMultiCupsMode ? 'checked' : ''} 
+                           class="rounded text-orange-600 focus:ring-orange-500">
+                    <span>Multi-CUPS</span>
+                </label>
+                
+                <select onchange="handleBrandChange(event)" class="bg-white border rounded p-1 font-bold text-sm text-slate-600 shadow-sm">
+                    <option value="POWER CUP" ${state.config.brand === 'POWER CUP' ? 'selected' : ''}>POWER CUP</option>
+                    <option value="DRK" ${state.config.brand === 'DRK' ? 'selected' : ''}>DRK ENERGÍA</option>
+                </select>
+
+                <select onchange="handleTariffChange(event)" class="bg-white border rounded p-1 font-bold text-sm text-slate-600 shadow-sm">
+                    <option value="3.0TD" ${state.config.tariff === '3.0TD' ? 'selected' : ''}>3.0TD</option>
+                    <option value="2.0TD" ${state.config.tariff === '2.0TD' ? 'selected' : ''}>2.0TD</option>
+                    <option value="6.1TD" ${state.config.tariff === '6.1TD' ? 'selected' : ''}>6.1TD</option>
+                </select>
+                <input type="number" value="31" onblur="handleConfigChange('days',this.value)" class="w-12 text-center border rounded p-1 font-bold text-sm text-slate-600 shadow-sm" title="Días Factura">
+
+                <label class="flex items-center space-x-2 text-xs font-medium text-slate-700 ${state.config.brand === 'DRK' ? 'opacity-50' : ''}">
+                    <input type="checkbox" 
+                           onchange="handleConfigChange('isSinglePresentationMode', this.checked)" 
+                           ${state.config.isSinglePresentationMode ? 'checked' : ''} 
+                           ${state.config.brand === 'DRK' ? 'disabled' : ''} 
+                           class="rounded text-orange-600 focus:ring-orange-500">
+                    <span>Oferta Única</span>
+                </label>
+            </div>
+        </header>
+
+        <div class="grid md:grid-cols-3 gap-6">
+            <div class="md:col-span-1 space-y-6">
+                <div id="client-inputs-section"></div>
+            </div>
+            
+            <div class="md:col-span-2 space-y-6">
+                <div id="drk-editor"></div>
+                <div id="results-section"></div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="modal-container"></div>
+    <div id="notification-container" class="fixed top-4 right-4 z-50"></div>
+</body>
+</html>
