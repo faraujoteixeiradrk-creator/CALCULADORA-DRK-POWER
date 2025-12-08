@@ -1,9 +1,8 @@
-<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DRK ENERGÍA | Comparador Pro V4.54</title>
+    <title>DRK ENERGÍA | Comparador Pro V4.55</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Lucide Icons CDN -->
@@ -86,6 +85,7 @@
                 inputMode: 'manual', 
                 retailerFilter: '', 
                 segmentFilter: '', 
+                zoneFilter: '', // NUEVO: Filtro de Zona Geográfica
                 winningTariffId: null, 
                 isSinglePresentationMode: false, 
                 reportHeader: 'DRK Energía | Asesoría Energética', 
@@ -105,6 +105,7 @@
             showReportModal: false, 
             retailerFilterOptions: [], 
             segmentFilterOptions: [], 
+            zoneFilterOptions: [], // NUEVO: Opciones de Zona Geográfica
             selectedRankingIds: [],
             
             multiCupsData: [], 
@@ -129,6 +130,7 @@
 
             state.config = { ...state.config, 
                 segmentFilter: '', 
+                zoneFilter: '', // NUEVO: Resetear filtro de zona
                 winningTariffId: null,
                 retailerFilter: '',
                 rankingRetailerFilter: '',
@@ -137,10 +139,6 @@
         }
 
         // --- FIREBASE AND LOCAL STORAGE FUNCTIONS ---
-        // (Las funciones loadTariffsFromStorage, saveTariffsToStorage, deleteTariffsFromStorage
-        // y initializeFirebaseAndLoadData se mantienen sin cambios mayores, excepto el uso de window.firebase)
-
-        // Carga tarifas: Intenta Firebase (si está listo), si falla/no está, usa localStorage.
         async function loadTariffsFromStorage() {
             let loaded = false;
             
@@ -160,6 +158,7 @@
                             config: { ...state.config, lastUploadDate: uploadDate },
                             retailerFilterOptions: [...new Set(tariffs.map(t=>t.retailer))],
                             segmentFilterOptions: [...new Set(tariffs.map(t=>t.segment))].sort(),
+                            zoneFilterOptions: [...new Set(tariffs.map(t=>t.zone))].sort(), // NUEVO: Cargar opciones de zona
                         });
                         showNotification(`Tarifas cargadas de la Nube (${tariffs.length}).`, 'info');
                         loaded = true;
@@ -182,6 +181,7 @@
                             config: { ...state.config, lastUploadDate: uploadDate },
                             retailerFilterOptions: [...new Set(tariffs.map(t=>t.retailer))],
                             segmentFilterOptions: [...new Set(tariffs.map(t=>t.segment))].sort(),
+                            zoneFilterOptions: [...new Set(tariffs.map(t=>t.zone))].sort(), // NUEVO: Cargar opciones de zona
                         });
                         if (tariffs.length > 0) {
                             showNotification(`Tarifas cargadas de LocalStorage (${tariffs.length}). La persistencia es local.`, 'info');
@@ -257,11 +257,13 @@
                 result: null,
                 retailerFilterOptions: [],
                 segmentFilterOptions: [],
+                zoneFilterOptions: [], // NUEVO: Resetear opciones de zona
                 selectedRankingIds: [],
                 config: {
                     ...state.config,
                     lastUploadDate: null,
                     segmentFilter: '', 
+                    zoneFilter: '', // NUEVO: Resetear filtro de zona
                     winningTariffId: null,
                     retailerFilter: '',
                     rankingRetailerFilter: '',
@@ -310,7 +312,7 @@
             renderUI(); 
         }
 
-        // --- V4.54 Initialization Entry Point ---
+        // --- V4.55 Initialization Entry Point ---
         function initializeApp() { 
             resetAllState();
             state.config.tariff = '2.0TD';
@@ -338,7 +340,7 @@
             const isHV = m.includes('3.0TD') || m.includes('6.1TD');
             return {
                 p: isHV ? 6 : 2, 
-                e: isHV ? 6 : 3  
+                e: isHV ? 6 : 3 
             };
         }
 
@@ -391,6 +393,7 @@
                     brand: newBrand, 
                     reportHeader: newHeader, 
                     segmentFilter: '', 
+                    zoneFilter: '', // NUEVO: Resetear filtro de zona
                     winningRetailerFilter: '', 
                     isSinglePresentationMode: isDrk ? true : state.config.isSinglePresentationMode 
                 }, 
@@ -424,6 +427,7 @@
                 
                 state.config.tariff = newTariff;
                 state.config.segmentFilter = '';
+                state.config.zoneFilter = ''; // NUEVO: Resetear filtro de zona
                 state.config.winningTariffId = null;
 
 
@@ -438,7 +442,7 @@
             } else {
                 resetAllState();
                 setState({ 
-                    config: { ...state.config, tariff: newTariff, segmentFilter: '' }, 
+                    config: { ...state.config, tariff: newTariff, segmentFilter: '', zoneFilter: '' }, // NUEVO: Resetear filtro de zona
                     result: null, 
                     comparisonResults: [] 
                 }); 
@@ -476,6 +480,7 @@
         function handleReportHeaderChange(e) { setState({ config: { ...state.config, reportHeader: e.target.value } }); }
         function handleRetailerFilterChange(e) { setState({ config: { ...state.config, retailerFilter: e.target.value } }); }
         function handleSegmentFilterChange(e) { setState({ config: { ...state.config, segmentFilter: e.target.value } }); }
+        function handleZoneFilterChange(e) { setState({ config: { ...state.config, zoneFilter: e.target.value } }); } // NUEVO: Handler de Zona
         
         function handleRankingRetailerFilterChange(e) { 
             setState({ config: { ...state.config, rankingRetailerFilter: e.target.value } }); 
@@ -538,7 +543,7 @@
                         newDays = finalDays;
                         daysCalculated = true;
                     } else {
-                         console.error("Días calculados inválidos:", finalDays);
+                        console.error("Días calculados inválidos:", finalDays);
                     }
                 } catch(e) {
                     console.error("Error al calcular días de la factura:", e);
@@ -569,26 +574,26 @@
             
             // Forzar el recálculo si ya está seleccionado el segmento y total
             if (state.config.segmentFilter && clientTotalInvoice > 0) {
-                 // **IMPORTANTE**: Para que calculate() use el newDays, necesitamos actualizar el estado primero.
-                 // Aunque calculate() se llama aquí, la llamada final a setState es la que actualiza la UI.
-                 // Si calculate() usa un valor obsoleto, el resultado será incorrecto.
-                 // Vamos a calcular usando newDays si está disponible.
-                 
-                 // Opción 1 (Más limpia): Llamar a calculate después del setState final para que use el nuevo estado
-                 
-                 // Opción 2: Replicar la lógica de calculate para la notificación
+                // **IMPORTANTE**: Para que calculate() use el newDays, necesitamos actualizar el estado primero.
+                // Aunque calculate() se llama aquí, la llamada final a setState es la que actualiza la UI.
+                // Si calculate() usa un valor obsoleto, el resultado será incorrecto.
+                // Vamos a calcular usando newDays si está disponible.
+                
+                // Opción 1 (Más limpia): Llamar a calculate después del setState final para que use el nuevo estado
+                
+                // Opción 2: Replicar la lógica de calculate para la notificación
 
                 if (daysCalculated) {
-                     showNotification(`¡Datos de factura 2.0TD cargados! Días: ${newDays}. Calculando...`, "success");
-                 } else {
-                      showNotification(`¡Datos de factura 2.0TD cargados! Consumo total: ${formatCurrency(totalConsumption, 0)} kWh. Calculando...`, "success");
-                 }
-                 
+                       showNotification(`¡Datos de factura 2.0TD cargados! Días: ${newDays}. Calculando...`, "success");
+                     } else {
+                         showNotification(`¡Datos de factura 2.0TD cargados! Consumo total: ${formatCurrency(totalConsumption, 0)} kWh. Calculando...`, "success");
+                     }
+                
             } else {
                 if (daysCalculated) {
-                     showNotification(`¡Datos de factura 2.0TD cargados! Días (${newDays}) y CUPS OK. Falta el Segmento para calcular.`, "info");
+                       showNotification(`¡Datos de factura 2.0TD cargados! Días (${newDays}) y CUPS OK. Falta el Segmento para calcular.`, "info");
                 } else {
-                     showNotification(`¡Datos de factura 2.0TD cargados! Consumo total: ${formatCurrency(totalConsumption, 0)} kWh. Falta Segmento para calcular.`, "info");
+                       showNotification(`¡Datos de factura 2.0TD cargados! Consumo total: ${formatCurrency(totalConsumption, 0)} kWh. Falta Segmento para calcular.`, "info");
                 }
             }
             
@@ -651,6 +656,7 @@
                 config: { 
                     ...state.config, 
                     segmentFilter: '', 
+                    zoneFilter: '', // NUEVO: Resetear filtro de zona
                     winningTariffId: null,
                     rankingRetailerFilter: '',
                     winningRetailerFilter: ''
@@ -716,6 +722,7 @@
                     ...state.config,
                     tariff: lastTariffModel,
                     segmentFilter: '',
+                    zoneFilter: '', // NUEVO: Resetear filtro de zona
                     winningTariffId: null,
                     isMultiCupsMode: true
                 }
@@ -780,8 +787,25 @@
             showNotification("Ranking de opciones reseteado.", "info");
         }
 
-        // --- CÁLCULOS EXCEL Y PRINCIPAL (SE MANTIENEN) ---
-        const EXCEL_MAP = { retailer: 0, tariffName: 1, tariffModel: 2, p1_en: 4, p2_en: 5, p3_en: 6, p4_en: 7, p5_en: 8, p6_en: 9, en_discount: 10, p1_pow_an: 11, p2_pow_an: 13, p3_pow_an: 13, p4_pow_an: 14, p5_pow_an: 15, p6_pow_an: 16, pow_discount: 17, segment: 19 };
+        // --- CÁLCULOS EXCEL Y PRINCIPAL ---
+        
+        // Mapeo actualizado: Cía(A:0), Tarifa(B:1), Modelo(D:3), Zona(E:4)
+        // E1-E6 (K:10 - P:15), Desc. Energía (Q:16), 
+        // P1-P6 (R:17 - W:22), Desc. Potencia (X:23), Segmento (AI:34)
+        const EXCEL_MAP = { 
+            retailer: 0, 
+            tariffName: 1, 
+            tariffModel: 3, 
+            zone: 4, // NUEVO: Columna E (4)
+            
+            p1_en: 10, p2_en: 11, p3_en: 12, p4_en: 13, p5_en: 14, p6_en: 15, // K-P
+            en_discount: 16, // Q
+            
+            p1_pow_an: 17, p2_pow_an: 18, p3_pow_an: 19, p4_pow_an: 20, p5_pow_an: 21, p6_pow_an: 22, // R-W
+            pow_discount: 23, // X
+            
+            segment: 34 // AI
+        };
         
         function handleExcelUpload(e) {
             const f = e.target.files[0]; if(!f) return;
@@ -793,15 +817,29 @@
                     const json = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false });
                     if(json.length < 2) throw new Error("Vacio");
                     const segs = new Set();
-                    const tarifs = json.slice(1).map((row, i) => {
+                    const zones = new Set(); // NUEVO: Conjunto de zonas
+                    const uniqueTariffs = new Map(); // Para desduplicación
+
+                    json.slice(1).forEach((row, i) => {
                         const s = String(row[EXCEL_MAP.segment]||'').toUpperCase().trim();
                         const m = String(row[EXCEL_MAP.tariffModel]||'').toUpperCase().trim();
-                        if(s) segs.add(s);
+                        const z = String(row[EXCEL_MAP.zone]||'').toUpperCase().trim(); // NUEVO: Capturar zona
+                        const r = String(row[EXCEL_MAP.retailer]||'Desc').toUpperCase().trim();
+                        const n = String(row[EXCEL_MAP.tariffName]||`T${i}`);
                         
-                        const isHV = m.includes('3.0TD') || m.includes('6.1TD');
+                        // CLAVE CRÍTICA DE DESDUPLICACIÓN: Debe incluir la zona.
+                        const uniqueKey = `${r}|${n}|${m}|${z}`; 
+
+                        // Si ya existe una tarifa con la misma clave, ignorarla.
+                        if (uniqueTariffs.has(uniqueKey)) return;
+
+                        if(s) segs.add(s);
+                        if(z) zones.add(z); // NUEVO: Añadir zona a las opciones
                         
                         const t = {
-                            id: `t-${i}-${m}`, retailer: String(row[EXCEL_MAP.retailer]||'Desc').toUpperCase().trim(), name: String(row[EXCEL_MAP.tariffName]||`T${i}`), model: m, segment: s,
+                            id: `t-${i}-${m}`, retailer: r, name: n, model: m, segment: s, zone: z, // NUEVO: Añadir zona
+                            
+                            // Se mapean los 6 periodos de Potencia (R-W) y Energía (K-P)
                             pow_an: Array(6).fill(0).map((_,j)=>parseNumericInput(row[EXCEL_MAP.p1_pow_an+j])||0),
                             en: Array(6).fill(0).map((_,j)=>parseNumericInput(row[EXCEL_MAP.p1_en+j])||0),
                             pow_discount: parseNumericInput(row[EXCEL_MAP.pow_discount]||0)/100, en_discount: parseNumericInput(row[EXCEL_MAP.en_discount]||0)/100
@@ -812,15 +850,17 @@
                             t.en = t.en.slice(0, 3);
                         }
 
-                        return t;
-                    }).filter(x=>x);
+                        uniqueTariffs.set(uniqueKey, t);
+                    });
                     
-                    saveTariffsToStorage(tarifs);
+                    const tariffs = Array.from(uniqueTariffs.values());
+                    saveTariffsToStorage(tariffs);
 
                     setState({ 
-                        uploadedTariffs: tarifs, 
-                        retailerFilterOptions: [...new Set(tarifs.map(t=>t.retailer))], 
+                        uploadedTariffs: tariffs, 
+                        retailerFilterOptions: [...new Set(tariffs.map(t=>t.retailer))], 
                         segmentFilterOptions: [...segs].sort(), 
+                        zoneFilterOptions: [...zones].sort(), // NUEVO: Setear opciones de zona
                         isScanning: false, 
                         comparisonResults: [],
                         config: { 
@@ -829,7 +869,7 @@
                             lastUploadDate: new Date() 
                         }
                     });
-                    showNotification(`${tarifs.length} tarifas importadas.`, 'success');
+                    showNotification(`${tariffs.length} tarifas importadas.`, 'success');
                 } catch(err) { setState({ isScanning: false }); showNotification("Error al procesar el Excel. Verifica el formato.", 'error'); }
             };
             r.readAsArrayBuffer(f);
@@ -864,7 +904,10 @@
         }
 
         function calculate() {
-            if(!state.uploadedTariffs.length || !state.config.segmentFilter) return showNotification("Falta archivo o segmento", 'error');
+            if(!state.uploadedTariffs.length) return showNotification("Falta archivo de tarifas", 'error');
+            if(!state.config.segmentFilter) return showNotification("Falta seleccionar Segmento", 'error');
+            if(!state.config.zoneFilter) return showNotification("Falta seleccionar Zona Geográfica", 'error'); // NUEVO: Validación de zona
+            
             if(state.config.isMultiCupsMode && (!state.inputs.cups || !state.inputs.clientName)) {
                  return showNotification("En modo Multi-CUPS, se requiere Nombre Cliente y CUPS para el estudio.", 'error');
             }
@@ -882,13 +925,46 @@
             const res = state.uploadedTariffs.filter(t => {
                 const s = t.segment; 
                 const f = state.config.segmentFilter;
+                const z = t.zone; // Nueva variable de zona
+                const fz = state.config.zoneFilter; // Nuevo filtro de zona
                 const m = state.config.tariff; 
                 
                 if(!t.model.toUpperCase().includes(m)) return false;
 
-                if (isDrkBrand && t.retailer.toUpperCase() !== 'DRK') return false; 
+                // --- INICIO: CORRECCIÓN PARA DRK ENERGÍA ---
+                if (isDrkBrand) {
+                    const retailerUpper = t.retailer.toUpperCase();
+                    // Permite DRK, DRK ENERGIA, DRK ENERGÍA S.L., etc.
+                    if (!retailerUpper.includes('DRK') && !retailerUpper.includes('DRK ENERGIA')) return false;
+                }
+                // --- FIN: CORRECCIÓN PARA DRK ENERGÍA ---
+                
+                // --- INICIO: FILTRO DE ZONA GEOGRÁFICA (COLUMNA E) ---
+                if (fz && z !== fz) {
+                    return false;
+                }
+                // --- FIN: FILTRO DE ZONA GEOGRÁFICA ---
 
-                if(['R','P','C','A'].includes(f)) { if(!s.includes(f)) return false; } else if(!s.startsWith(f)) return false;
+                // --- INICIO: CORRECCIÓN LÓGICA DE FILTRO DE SEGMENTO (COLUMNA AI) ---
+                // Aplicamos la regla: si el segmento del filtro (f) contiene una o más letras que
+                // coincidan con las letras del segmento de la tarifa (s), se considera un match.
+                if (f) {
+                    const filterChars = f.split(''); // Ej: ['A', 'R']
+                    let segmentMatchFound = false;
+
+                    for (const char of filterChars) {
+                        // Si el segmento de la tarifa (s) contiene AL MENOS un carácter del filtro (f)
+                        if (s.includes(char)) {
+                            segmentMatchFound = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!segmentMatchFound) {
+                        return false;
+                    }
+                }
+                // --- FIN: CORRECCIÓN LÓGICA DE FILTRO DE SEGMENTO ---
                 
                 if(!state.config.isMultiCupsMode && state.config.retailerFilter && t.retailer !== state.config.retailerFilter) return false;
                 
@@ -927,7 +1003,6 @@
         }
 
         function getPricesForMail(plan) {
-            // ... (se mantiene igual)
             const periods = getTariffPeriods(plan.model);
             const pPeriodsCount = periods.p;
             const ePeriodsCount = periods.e;
@@ -935,7 +1010,7 @@
             const getPrices = (t) => {
                 const pp = [], pe = [];
                 for(let i=0; i<pPeriodsCount; i++) pp.push( (t.pow_an[i]*(1-t.pow_discount))/365 ); 
-                for(let i=0; i<ePeriodsCount; i++) pe.push( t.en[i]*(1-t.en_discount) );         
+                for(let i=0; i<ePeriodsCount; i++) pe.push( t.en[i]*(1-t.en_discount) ); 
                 return { pp, pe };
             };
             
@@ -946,14 +1021,13 @@
                 priceDetails += `P${i+1} (Potencia - €/kW/día): ${formatCurrency(prices.pp[i], 8)}\n`;
             }
             for (let i = 0; i < ePeriodsCount; i++) {
-                priceDetails += `E${i+1} (Energía - €/kWh): ${formatCurrency(prices.pe[i], 8)}\n`; // <-- LÍNEA CORREGIDA: Faltaba el backtick de cierre aquí
+                priceDetails += `E${i+1} (Energía - €/kWh): ${formatCurrency(prices.pe[i], 8)}\n`;
             }
 
             return priceDetails;
         }
 
         function generateMailtoLink(plan) {
-            // ... (se mantiene igual)
             const brand = state.config.brand;
             const company = brand.toUpperCase(); 
             
@@ -968,6 +1042,7 @@ Adjunto la documentación necesaria para la gestión del cambio de comercializad
 --- DATOS DE LA OFERTA ---
 
 Comercializadora y Tarifa: ${plan.retailer} - ${plan.name} (${plan.model})
+Zona Geográfica: ${plan.zone}
 Ahorro Anual Estimado: ${formatCurrency(plan.savings, 0)} €
 Total Mensual Estimado: ${formatCurrency(plan.periodCost, 2)} €
 
@@ -997,13 +1072,13 @@ Para formalizar el contrato, por favor, responde a este email adjuntando:
         }
         
         function getUniqueWinningPlans() {
-            // ... (se mantiene igual)
             const uniquePlans = new Map();
             const cupsMap = new Map(); 
 
             state.multiCupsData.forEach(cupsData => {
                 const plan = cupsData.plan;
-                const key = `${plan.retailer}|${plan.name}|${plan.model}`;
+                // CLAVE ÚNICA DE PLAN CONSOLIDADO: Incluye zona
+                const key = `${plan.retailer}|${plan.name}|${plan.model}|${plan.zone}`; 
 
                 if (!uniquePlans.has(key)) {
                     uniquePlans.set(key, plan);
@@ -1019,7 +1094,6 @@ Para formalizar el contrato, por favor, responde a este email adjuntando:
         }
 
         function generateMultiCupsMailtoLink() {
-            // ... (se mantiene igual)
             if (state.multiCupsData.length === 0) return '';
             
             const { plans, cupsMap } = getUniqueWinningPlans();
@@ -1039,12 +1113,13 @@ Para formalizar el contrato, por favor, responde a este email adjuntando:
 
             plans.forEach((plan, index) => {
                 const prices = getPricesForMail(plan);
-                const key = `${plan.retailer}|${plan.name}|${plan.model}`;
+                const key = `${plan.retailer}|${plan.name}|${plan.model}|${plan.zone}`;
                 const associatedCups = cupsMap.get(key) || [];
 
                 priceDetails += `\n--- OFERTA ÚNICA #${index + 1} ---\n`;
                 priceDetails += `Comercializadora: ${plan.retailer}\n`;
                 priceDetails += `Tarifa: ${plan.name} (${plan.model})\n`;
+                priceDetails += `Zona Geográfica: ${plan.zone}\n`;
                 
                 priceDetails += `CUPS Asociados: ${associatedCups.join(', ')}\n`;
                 priceDetails += `\n--- DETALLE DE PRECIOS (€) ---\n`;
@@ -1097,7 +1172,6 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
         function renderIcon(n, c) { return `<i data-lucide="${n}" class="${c}"></i>`; }
 
         function getDetailedSimulacroData(plan, studyInputs) { 
-            // ... (se mantiene igual)
             const periods = getTariffPeriods(plan.model);
             const pPeriods = periods.p; 
             const ePeriods = periods.e;
@@ -1140,14 +1214,13 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
         }
 
         function renderReportModal() {
-            // ... (se mantiene igual)
             if (!state.showReportModal || !state.result || !state.config.winningTariffId) return '';
             const plan = state.result.bestPlan;
             
             const cPrimary = '#7c2d12'; 
-            const cAccent = '#ea580c';  
+            const cAccent = '#ea580c'; 
             const cBgLight = '#fff7ed'; 
-            const cBorder = '#fdba74';  
+            const cBorder = '#fdba74'; 
             const cTableHead = cPrimary; 
             const cTextDark = '#111827'; 
             
@@ -1190,7 +1263,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             
             const periods = getTariffPeriods(plan.model);
             const pPeriodsCount = periods.p;
-            const ePeriodsCount = periods.e;
+            const ePeriodsCount = periods.p; // Corregido: Debe ser periods.e (Aunque para 2.0TD es 3)
 
             const getPrices = (t) => {
                 const pp = [], pe = [];
@@ -1209,7 +1282,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(getPrices(c).pp[i],6)}</td>`).join('')}</tr>`;
             }
             for(let i=0; i<ePeriodsCount; i++) {
-                compTableHtml += `<tr style="background:${i%2===0?'#fff':cBgLight};border-top:1px solid #eee"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Energía P${i+1} (€/kWh)</td>
+                compTableHtml += `<tr style="background:${i%2===0?'#fff':cBgLight};border-top:1px solid #eee"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Energía E${i+1} (€/kWh)</td>
                 ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(getPrices(c).pe[i],6)}</td>`).join('')}</tr>`;
             }
             compTableHtml += `<tr style="border-top:2px solid ${cAccent};background:#fff7ed;font-weight:bold"><td style="padding:8px;color:${cAccent}">AHORRO ANUAL</td>
@@ -1281,7 +1354,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                                 </a>
                                 
                                 <p style="margin-top: 15px; font-size: 11px; color: #666;">
-                                     Contacto: <a href="mailto:${getEmailTarget()}" style="color: ${cPrimary}; text-decoration: underline;">${getEmailTarget()}</a>
+                                    Contacto: <a href="mailto:${getEmailTarget()}" style="color: ${cPrimary}; text-decoration: underline;">${getEmailTarget()}</a>
                                 </p>
                             </td>
                         </tr>
@@ -1345,7 +1418,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             <div id="reportModal" class="fixed inset-0 bg-black/80 flex justify-center items-center z-50 p-4">
                 <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto flex flex-col">
                     <div class="flex justify-between p-4 border-b bg-slate-50 sticky top-0 z-20">
-                        <h2 class="font-bold text-slate-700">Informe Comercial V4.54</h2>
+                        <h2 class="font-bold text-slate-700">Informe Comercial V4.55</h2>
                         <div class="flex gap-2">
                             <button onclick="copyVisualReport()" class="bg-orange-600 text-white px-3 py-1 rounded font-bold text-sm">COPIAR IMAGEN</button>
                             <button onclick="setState({showReportModal:false})" class="text-slate-500">✕</button>
@@ -1378,7 +1451,8 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                                         </td>
                                         <td style="text-align:right;">
                                             <strong>GANADORA:</strong> ${plan.retailer} |
-                                            <strong>TARIFA:</strong> ${plan.name} (${plan.model})
+                                            <strong>TARIFA:</strong> ${plan.name} (${plan.model}) |
+                                            <strong>ZONA:</strong> ${plan.zone}
                                         </td>
                                     </tr>
                                     <tr>
@@ -1426,7 +1500,6 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
         }
         
         function renderMultiCupsReport() {
-            // ... (se mantiene igual)
             if (!state.isFinalReportVisible || state.multiCupsData.length === 0) {
                 return `<div class="p-8 text-center text-slate-500">No hay datos de CUPS guardados para el informe consolidado.</div>`;
             }
@@ -1452,7 +1525,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             const emailTarget = getEmailTarget();
 
             const cPrimary = '#7c2d12'; 
-            const cAccent = '#ea580c';  
+            const cAccent = '#ea580c'; 
             const cBgLight = '#fff7ed'; 
             const cTextDark = '#111827'; 
             const cSavingsHighlight = cAccent; 
@@ -1508,6 +1581,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                     <tr style="background:${cPrimary}; color:white;">
                         <th style="padding: 8px; text-align: left;">MODELO</th>
                         <th style="padding: 8px; text-align: left;">CUPS</th>
+                        <th style="padding: 8px; text-align: left;">COMERCIALIZADORA / TARIFA</th> 
                         <th style="padding: 8px; text-align: right;">AHORRO ANUAL</th>
                     </tr>
                 </thead>
@@ -1519,12 +1593,13 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 summaryCupsTableHtml += `<tr style="background:${rowBg}; border-bottom: 1px solid #eee;">
                     <td style="padding: 6px; font-weight: bold; color: #333;">${model}</td>
                     <td style="padding: 6px; font-family: monospace;">${cups.cups}</td>
+                    <td style="padding: 6px; font-weight: medium; color: #555;">${cups.plan.retailer} / ${cups.plan.name}</td> 
                     <td style="padding: 6px; text-align: right; font-weight: bold; color: ${cSavingsHighlight};">${formatCurrency(cups.savings, 0)} €</td>
                 </tr>`;
             });
 
             summaryCupsTableHtml += `<tr style="background:${cPrimary}; color:white; font-weight:bold; border-top: 2px solid white;">
-                <td colspan="2" style="padding: 8px; text-align: right;">TOTAL AHORRO CONSOLIDADO</td>
+                <td colspan="3" style="padding: 8px; text-align: right;">TOTAL AHORRO CONSOLIDADO</td> 
                 <td style="padding: 8px; text-align: right; font-size: 14px;">${formatCurrency(totalSavings, 0)} €</td>
             </tr></tbody></table>`;
 
@@ -1537,7 +1612,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
 
                 const periods = getTariffPeriods(plan.tariffModel);
                 const pPeriodsCount = periods.p;
-                const ePeriodsCount = periods.e;
+                const ePeriodsCount = periods.e; // Corregido
 
                 const getPrices = (t) => {
                     const pp = [], pe = [];
@@ -1555,7 +1630,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                     pricesHtml += `<tr><td style="padding:3px; color:${cPrimary}">Potencia P${i+1} (€/kW/día)</td><td style="padding:3px; text-align:right">${formatCurrency(prices.pp[i], 8)}</td></tr>`;
                 }
                 for (let i = 0; i < ePeriodsCount; i++) {
-                    pricesHtml += `<tr><td style="padding:3px; color:${cPrimary}">Energía P${i+1} (€/kWh)</td><td style="padding:3px; text-align:right">${formatCurrency(prices.pe[i], 8)}</td></tr>`;
+                    pricesHtml += `<tr><td style="padding:3px; color:${cPrimary}">Energía E${i+1} (€/kWh)</td><td style="padding:3px; text-align:right">${formatCurrency(prices.pe[i], 8)}</td></tr>`;
                 }
                 pricesHtml += `</table>`;
                 
@@ -1592,7 +1667,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 return `
                     <div style="border: 1px solid #fdba74; border-radius: 8px; padding: 15px; margin-bottom: 20px; background: #fff;">
                         <h4 style="font-size:14px; font-weight:bold; color:${cAccent}; border-bottom:1px dashed #f97316; padding-bottom:5px; margin-bottom:10px;">
-                            CUPS ${cups.cupsIndex}: ${cups.cups} (${cups.tariffModel}) - ${cups.plan.retailer}
+                            CUPS ${cups.cupsIndex}: ${cups.cups} (${cups.tariffModel}) - ${cups.plan.retailer} / ${cups.plan.name} / ZONA: ${cups.plan.zone} 
                         </h4>
                         
                         <table border="0" cellpadding="0" cellspacing="0" style="width:100%;">
@@ -1643,7 +1718,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 <div class="fixed inset-0 bg-black/80 flex justify-center items-center z-50 p-4">
                     <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto flex flex-col">
                         <div class="flex justify-between p-4 border-b bg-slate-50 sticky top-0 z-20">
-                            <h2 class="font-bold text-slate-700">Informe Consolidado Multi-CUPS V4.54</h2>
+                            <h2 class="font-bold text-slate-700">Informe Consolidado Multi-CUPS V4.55</h2>
                             <div class="flex gap-2">
                                 <button onclick="copyVisualReport()" class="bg-orange-600 text-white px-3 py-1 rounded font-bold text-sm">COPIAR IMAGEN</button>
                                 <button onclick="returnToCupsEntry()" class="text-slate-500">✕</button>
@@ -1768,9 +1843,9 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
 
             // Añadir el Consumo Total Facturado (calculado)
              html += `<div class="qr-kv bg-orange-50 mt-2 font-bold text-orange-800">
-                <span>CONSUMO TOTAL FACTURADO</span>
-                <span>${formatCurrency(totalConsumption, 0)} kWh</span>
-            </div>`;
+                 <span>CONSUMO TOTAL FACTURADO</span>
+                 <span>${formatCurrency(totalConsumption, 0)} kWh</span>
+             </div>`;
             
             if (QR_PARSED) QR_PARSED.innerHTML = html;
         }
@@ -1972,8 +2047,8 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             // --- INICIO: CORRECCIÓN DE DÍAS VISIBLES EN EL INPUT DE CABECERA ---
             const daysInput = document.getElementById('days-input');
             if (daysInput && state.config.tariff === '2.0TD' && daysInput.value !== String(state.config.days)) {
-                 // Forzar la actualización del valor del DOM si la tarifa es 2.0TD (deshabilitada) y el valor ha cambiado.
-                 daysInput.value = state.config.days;
+                // Forzar la actualización del valor del DOM si la tarifa es 2.0TD (deshabilitada) y el valor ha cambiado.
+                daysInput.value = state.config.days;
             }
             // --- FIN: CORRECCIÓN DE DÍAS VISIBLES EN EL INPUT DE CABECERA ---
 
@@ -1981,12 +2056,11 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             
             const brandElement = document.getElementById('main-brand');
             if (brandElement) {
-                brandElement.textContent = state.config.brand;
+                brandElement.textContent = state.config.brand === 'DRK' ? 'DRK ENERGÍA' : 'POWER CUP';
             }
         }
 
         function renderTariffDatabaseSection() {
-            // ... (se mantiene igual, se eliminó la función de renderizado para simplificar el código)
             const hasData = state.uploadedTariffs.length > 0;
             const allResults = state.comparisonResults;
             const selectedRetailers = getSelectedRetailers(state.selectedRankingIds, allResults);
@@ -2002,9 +2076,17 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
 
 
             const currentTariffModel = state.config.tariff;
+            
+            // Filtra opciones de Segmento basadas en el modelo de tarifa actual
             const filteredSegmentOptions = [...new Set(state.uploadedTariffs
                 .filter(t => t.model.toUpperCase().includes(currentTariffModel))
                 .map(t => t.segment)
+            )].sort();
+
+            // Filtra opciones de Zona Geográfica basadas en el modelo de tarifa actual
+            const filteredZoneOptions = [...new Set(state.uploadedTariffs
+                .filter(t => t.model.toUpperCase().includes(currentTariffModel))
+                .map(t => t.zone)
             )].sort();
 
             const winningPlan = allResults.find(p => p.id === state.config.winningTariffId);
@@ -2034,9 +2116,9 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 return true;
             });
             
-            const isCalculateDisabled = !hasData || !state.config.segmentFilter;
+            const isCalculateDisabled = !hasData || !state.config.segmentFilter || !state.config.zoneFilter; // NUEVO: Deshabilitar sin zona
             const calculateButtonText = hasData 
-                ? (state.config.segmentFilter ? 'RE-CALCULAR Y FILTRAR' : 'SELECCIONAR SEGMENTO') 
+                ? (state.config.segmentFilter && state.config.zoneFilter ? 'RE-CALCULAR Y FILTRAR' : 'SELECCIONAR FILTROS') 
                 : 'CARGAR EXCEL DE TARIFAS';
 
             const isMultiCups = state.config.isMultiCupsMode;
@@ -2068,15 +2150,25 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 
                 <!-- SECCIÓN DE FILTROS Y CALCULAR -->
                 <div class="grid md:grid-cols-4 gap-4 items-end">
+                    
+                    <div>
+                        <label class="text-xs font-bold text-slate-500">Segmento (${currentTariffModel})</label>
+                        <select onchange="handleSegmentFilterChange(event)" class="w-full p-2 border rounded font-bold text-orange-800">
+                            <option value="" disabled ${!state.config.segmentFilter ? 'selected' : ''}>Seleccionar...</option>
+                            ${filteredSegmentOptions.map(s=>`<option value="${s}" ${state.config.segmentFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="text-xs font-bold text-slate-500">Zona Geográfica</label>
+                        <select onchange="handleZoneFilterChange(event)" class="w-full p-2 border rounded font-bold text-orange-800">
+                            <option value="" disabled ${!state.config.zoneFilter ? 'selected' : ''}>Seleccionar...</option>
+                            ${filteredZoneOptions.map(z=>`<option value="${z}" ${state.config.zoneFilter === z ? 'selected' : ''}>${z}</option>`).join('')}
+                        </select>
+                    </div>
+                    
                     ${isMultiCups ? 
                         `
-                            <div class="col-span-2">
-                                <label class="text-xs font-bold text-slate-500">Segmento (${currentTariffModel})</label>
-                                <select onchange="handleSegmentFilterChange(event)" class="w-full p-2 border rounded font-bold text-orange-800">
-                                    <option value="" disabled ${!state.config.segmentFilter ? 'selected' : ''}>Seleccionar...</option>
-                                    ${filteredSegmentOptions.map(s=>`<option value="${s}" ${state.config.segmentFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
-                                </select>
-                            </div>
                             <button onclick="calculate()" class="w-full bg-orange-600 text-white py-2 rounded font-bold shadow hover:bg-orange-700 col-span-2 ${isCalculateDisabled ? 'opacity-50 cursor-not-allowed bg-orange-400 hover:bg-orange-400' : ''}" ${isCalculateDisabled ? 'disabled' : ''}>
                                 ${calculateButtonText}
                             </button>
@@ -2084,20 +2176,13 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                         :
                         `
                             <div>
-                                <label class="text-xs font-bold text-slate-500">Segmento (${currentTariffModel})</label>
-                                <select onchange="handleSegmentFilterChange(event)" class="w-full p-2 border rounded font-bold text-orange-800">
-                                    <option value="" disabled ${!state.config.segmentFilter ? 'selected' : ''}>Seleccionar...</option>
-                                    ${filteredSegmentOptions.map(s=>`<option value="${s}" ${state.config.segmentFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
-                                </select>
-                            </div>
-                            <div>
                                 <label class="text-xs font-bold text-slate-500">Cía (Opcional)</label>
                                 <select onchange="handleRetailerFilterChange(event)" class="w-full p-2 border rounded">
                                     <option value="">Todas</option>
                                     ${state.retailerFilterOptions.map(r=>`<option value="${r}" ${state.config.retailerFilter === r ? 'selected' : ''}>${r}</option>`).join('')}
                                 </select>
                             </div>
-                            <button onclick="calculate()" class="w-full bg-orange-600 text-white py-2 rounded font-bold shadow hover:bg-orange-700 md:col-span-2 ${isCalculateDisabled ? 'opacity-50 cursor-not-allowed bg-orange-400 hover:bg-orange-400' : ''}" ${isCalculateDisabled ? 'disabled' : ''}>
+                            <button onclick="calculate()" class="w-full bg-orange-600 text-white py-2 rounded font-bold shadow hover:bg-orange-700 ${isCalculateDisabled ? 'opacity-50 cursor-not-allowed bg-orange-400 hover:bg-orange-400' : ''}" ${isCalculateDisabled ? 'disabled' : ''}>
                                 ${calculateButtonText}
                             </button>
                         `
@@ -2122,7 +2207,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                     <select onchange="handleWinningSelection(event)" class="w-full p-2 border border-orange-400 rounded font-bold text-slate-800 shadow-md bg-orange-50" value="${state.config.winningTariffId || ''}">
                         <option value="" disabled ${!state.config.winningTariffId ? 'selected' : ''}>-- ELEGIR TARIFAS GANADORA --</option>
                         ${filteredWinningResults.map(p => {
-                            return `<option value="${p.id}" ${state.config.winningTariffId === p.id ? 'selected' : ''}>${p.retailer} | ${p.name} (Ahorro: ${formatCurrency(p.savings,0)}€) (${p.model})</option>`;
+                            return `<option value="${p.id}" ${state.config.winningTariffId === p.id ? 'selected' : ''}>${p.retailer} | ${p.name} (Ahorro: ${formatCurrency(p.savings,0)}€) (${p.model} - ${p.zone})</option>`;
                         }).join('')}
                     </select>
 
@@ -2160,8 +2245,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                                     <span class="truncate font-medium text-slate-70um ${displayAsWinning ? 'font-bold text-orange-800' : ''}">${p.retailer} - ${p.name} (Ahorro: ${formatCurrency(p.savings,0)}€) ${displayAsWinning ? '(GANADORA)' : ''}</span>
                                 </label>`;
                             }).join('')}
-                        </div>`
-                    }
+                        </div>`}
                 </div>` : ''}
             </div>`;
         }
@@ -2216,7 +2300,6 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
         }
 
         function renderResults() {
-            // ... (se mantiene igual)
             if(!state.result || !state.config.winningTariffId) return '';
             const plan = state.result.bestPlan;
             const isReady = !!plan && !!state.result.current;
@@ -2313,16 +2396,16 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
     <div id="main-content-grid" class="min-h-screen p-4 max-w-5xl mx-auto">
         <header class="flex justify-between items-center mb-6">
             <h1 class="text-2xl font-black text-slate-800 tracking-tight">
-                <span id="main-brand" class="text-orange-600">${state.config.brand}</span> 
-                <span class="text-slate-400 font-light text-lg">| Comparador V4.54</span>
+                <span id="main-brand" class="text-orange-600">${state.config.brand === 'DRK' ? 'DRK ENERGÍA' : 'POWER CUP'}</span> 
+                <span class="text-slate-400 font-light text-lg">| Comparador V4.55</span>
             </h1>
             <div class="flex gap-4 items-center">
                 
                 <label class="flex items-center space-x-2 text-xs font-medium text-slate-700">
                     <input type="checkbox" id="multi-cups-toggle"
-                           onchange="handleMultiCupsModeChange(event)" 
-                           ${state.config.isMultiCupsMode ? 'checked' : ''} 
-                           class="rounded text-orange-600 focus:ring-orange-500">
+                                                 onchange="handleMultiCupsModeChange(event)" 
+                                                 ${state.config.isMultiCupsMode ? 'checked' : ''} 
+                                                 class="rounded text-orange-600 focus:ring-orange-500">
                     <span>Multi-CUPS</span>
                 </label>
                 
@@ -2348,10 +2431,10 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
 
                 <label class="flex items-center space-x-2 text-xs font-medium text-slate-700 ${state.config.brand === 'DRK' ? 'opacity-50' : ''}">
                     <input type="checkbox" 
-                           onchange="handleConfigChange('isSinglePresentationMode', this.checked)" 
-                           ${state.config.isSinglePresentationMode ? 'checked' : ''} 
-                           ${state.config.brand === 'DRK' ? 'disabled' : ''} 
-                           class="rounded text-orange-600 focus:ring-orange-500">
+                                                 onchange="handleConfigChange('isSinglePresentationMode', this.checked)" 
+                                                 ${state.config.isSinglePresentationMode ? 'checked' : ''} 
+                                                 ${state.config.brand === 'DRK' ? 'disabled' : ''} 
+                                                 class="rounded text-orange-600 focus:ring-orange-500">
                     <span>Oferta Única</span>
                 </label>
             </div>
