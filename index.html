@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -72,6 +73,10 @@
     </style>
     <script>
         const PDF_JS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+        
+        // CONSTANTES GLOBALES DE CÁLCULO
+        const IVA_RATE = 0.21;
+        const IMPUESTO_HC_RATE = 0.00234; // Constante para Gas
 
         // --- ESTADO Y CONFIGURACIÓN FIREBASE/LOCAL ---
         let db, auth, userId, appId;
@@ -79,7 +84,7 @@
         
         let state = {
             config: { 
-                tariff: '2.0TD', 
+                tariff: '3.0TD', // Valor inicial cambiado a 3.0TD para consistencia con el ejemplo
                 days: 31, 
                 comparisonType: 'total', 
                 inputMode: 'manual', 
@@ -315,7 +320,7 @@
         // --- V4.55 Initialization Entry Point ---
         function initializeApp() { 
             resetAllState();
-            state.config.tariff = '2.0TD';
+            state.config.tariff = '3.0TD';
             state.config.isMultiCupsMode = false;
             
             initializeFirebaseAndLoadData();
@@ -337,6 +342,10 @@
         
         function getTariffPeriods(model) {
             const m = model ? model.toUpperCase().trim() : '';
+            if (m.includes('RL')) {
+                 // GAS RLx: 1 Periodo Potencia (Término Fijo Anual), 1 Periodo Energía (Consumo Total)
+                 return { p: 1, e: 1 };
+            }
             const isHV = m.includes('3.0TD') || m.includes('6.1TD');
             return {
                 p: isHV ? 6 : 2, 
@@ -349,6 +358,7 @@
             if (m.includes('2.0TD')) return '2.0TD';
             if (m.includes('3.0TD')) return '3.0TD';
             if (m.includes('6.1TD')) return '6.1TD';
+            if (m.includes('RL')) return 'GAS-RL'; // NUEVO: Categoría Gas
             return 'OTHER';
         }
 
@@ -463,14 +473,12 @@
         }
 
         function handleConfigChange(n, v) { 
-            // Permite modificar los días manualmente SOLO si NO es 2.0TD (ya que en 2.0TD se bloquea para el QR)
+            // Permite modificar los días manualmente SOLO si NO es 2.0TD ni GAS-RL
             if (n === 'days') v = parseNumericInput(v); 
             if (n === 'isSinglePresentationMode') v = (v === 'true' || v === true);
             
-            // Si la tarifa es 2.0TD y el campo de días está deshabilitado, solo se actualiza desde el QR.
-            if (state.config.tariff === '2.0TD' && n === 'days') {
-                // Forzar re-renderizado para actualizar el valor visible, si se ha cambiado manualmente el foco
-                // Aunque el input está deshabilitado, esta línea de código es segura.
+            // Si la tarifa es 2.0TD o GAS-RL y el campo de días está deshabilitado, se mantiene el valor original.
+            if (['2.0TD', 'GAS-RL'].includes(state.config.tariff) && n === 'days') {
                 setState({ config: state.config }); 
                 return; 
             }
@@ -519,7 +527,6 @@
             if (data.iniF && data.finF) {
                 try {
                     // Crea fechas. Usamos YYYY-MM-DD.
-                    // Nota: Date() puede tener problemas de zona horaria, por eso normalizamos.
                     const startDate = new Date(data.iniF);
                     const endDate = new Date(data.finF);
 
@@ -533,10 +540,7 @@
                     // Convertir a días.
                     const diffDays = Math.round(timeDiff / (1000 * 3600 * 24)); 
                     
-                    // NOTA: Si el rango es inclusive (ambos días), se debe añadir 1 día.
-                    // Si iniF = 01/01/2023 y finF = 31/01/2023, la resta es 30 días, pero la factura es de 31 días.
-                    // Vamos a asumir que la diferencia de tiempo es suficiente y si faltara uno, la fuente de datos debe ser la que ajuste.
-                    // Pero si la diferencia es 30, son 31 días de servicio. Si diffDays es 30, newDays = 31.
+                    // Si diffDays es 30, son 31 días de servicio. Si diffDays es 30, newDays = 31.
                     const finalDays = diffDays + 1; // Ajuste común para facturas
                     
                     if (finalDays > 0 && finalDays < 366) {
@@ -570,35 +574,7 @@
                 p4_kwh: 0, p5_kwh: 0, p6_kwh: 0,
             };
             
-            // Las variables locales (newInputs, newDays) están correctas.
-            
-            // Forzar el recálculo si ya está seleccionado el segmento y total
-            if (state.config.segmentFilter && clientTotalInvoice > 0) {
-                // **IMPORTANTE**: Para que calculate() use el newDays, necesitamos actualizar el estado primero.
-                // Aunque calculate() se llama aquí, la llamada final a setState es la que actualiza la UI.
-                // Si calculate() usa un valor obsoleto, el resultado será incorrecto.
-                // Vamos a calcular usando newDays si está disponible.
-                
-                // Opción 1 (Más limpia): Llamar a calculate después del setState final para que use el nuevo estado
-                
-                // Opción 2: Replicar la lógica de calculate para la notificación
-
-                if (daysCalculated) {
-                       showNotification(`¡Datos de factura 2.0TD cargados! Días: ${newDays}. Calculando...`, "success");
-                     } else {
-                         showNotification(`¡Datos de factura 2.0TD cargados! Consumo total: ${formatCurrency(totalConsumption, 0)} kWh. Calculando...`, "success");
-                     }
-                
-            } else {
-                if (daysCalculated) {
-                       showNotification(`¡Datos de factura 2.0TD cargados! Días (${newDays}) y CUPS OK. Falta el Segmento para calcular.`, "info");
-                } else {
-                       showNotification(`¡Datos de factura 2.0TD cargados! Consumo total: ${formatCurrency(totalConsumption, 0)} kWh. Falta Segmento para calcular.`, "info");
-                }
-            }
-            
-            // Llamada final a setState para disparar la actualización de la UI con los nuevos valores.
-            // Esto garantiza que el input de días se actualice.
+            // Llamada a setState para disparar la actualización de la UI con los nuevos valores.
             const newState = {
                 inputs: newInputs,
                 config: { ...state.config, days: newDays }, // CLAVE: Reconstruir config para forzar la actualización del campo days
@@ -608,11 +584,20 @@
             setState(newState);
 
             // Si se cumplieron las condiciones de cálculo, lo disparamos con el nuevo estado:
-            if (state.config.segmentFilter && clientTotalInvoice > 0) {
-                // Como setState llama a renderUI y luego setState retorna, necesitamos re-disparar el cálculo
-                // después de un pequeño retraso o envolver la llamada original. 
-                // Ya que 'calculate' usa el estado global mutado por setState, no es necesario un delay.
+            if (state.config.segmentFilter && state.config.zoneFilter && clientTotalInvoice > 0) {
+                // Se llama después de setState para que el estado global (incluyendo newDays) esté actualizado
                 calculate();
+                if (daysCalculated) {
+                    showNotification(`¡Datos de factura 2.0TD cargados! Días: ${newDays}. Calculando...`, "success");
+                } else {
+                    showNotification(`¡Datos de factura 2.0TD cargados! Consumo total: ${formatCurrency(totalConsumption, 0)} kWh. Calculando...`, "success");
+                }
+            } else {
+                if (daysCalculated) {
+                    showNotification(`¡Datos de factura 2.0TD cargados! Días (${newDays}) y CUPS OK. Falta Segmento y/o Zona para calcular.`, "info");
+                } else {
+                    showNotification(`¡Datos de factura 2.0TD cargados! Consumo total: ${formatCurrency(totalConsumption, 0)} kWh. Falta Segmento y/o Zona para calcular.`, "info");
+                }
             }
         }
         
@@ -827,7 +812,7 @@
                         const r = String(row[EXCEL_MAP.retailer]||'Desc').toUpperCase().trim();
                         const n = String(row[EXCEL_MAP.tariffName]||`T${i}`);
                         
-                        // CLAVE CRÍTICA DE DESDUPLICACIÓN: Debe incluir la zona.
+                        // CLAVE CRÍTICA DE DESDUPLICACIÓN: Debe incluir la zona y el modelo.
                         const uniqueKey = `${r}|${n}|${m}|${z}`; 
 
                         // Si ya existe una tarifa con la misma clave, ignorarla.
@@ -845,10 +830,18 @@
                             pow_discount: parseNumericInput(row[EXCEL_MAP.pow_discount]||0)/100, en_discount: parseNumericInput(row[EXCEL_MAP.en_discount]||0)/100
                         };
                         
+                        // Ajuste de arrays para 2.0TD
                         if (m.includes('2.0TD')) { 
                             t.pow_an = t.pow_an.slice(0, 2); 
                             t.en = t.en.slice(0, 3);
                         }
+                        
+                        // Ajuste de arrays para GAS-RL (1 Periodo Fijo, 1 Periodo Energía)
+                        if (m.includes('RL')) {
+                            t.pow_an = t.pow_an.slice(0, 1);
+                            t.en = t.en.slice(0, 1);
+                        }
+
 
                         uniqueTariffs.set(uniqueKey, t);
                     });
@@ -876,6 +869,7 @@
         }
 
         const roundInternal = (n) => Math.round(n * 1000000) / 1000000;
+        const roundExternal = (n) => Math.round(n * 100) / 100;
 
         function calculateTariffCost(t, inp) {
             const periods = getTariffPeriods(t.model);
@@ -883,24 +877,76 @@
             const ePeriods = periods.e;
             let cP = 0, cE = 0;
 
-            for(let i=0; i<pPeriods; i++) {
-                const kw = inp[`p${i+1}_kw`]||0;
-                const annualPrice = t.pow_an[i]||0; 
-                const dailyPriceDiscounted = (annualPrice * (1-(t.pow_discount||0))) / 365;
-                cP += kw * state.config.days * dailyPriceDiscounted;
+            if (t.model.toUpperCase().includes('RL')) {
+                 // ** CÁLCULO ESPECÍFICO PARA GAS RLx **
+                 const days = state.config.days;
+                 const consumption = inp.p1_kwh || 0;
+
+                 // Termino Fijo Anual (€/año) -> t.pow_an[0] (R:17)
+                 const fixedPriceAnnual = t.pow_an[0] || 0;
+                 const energyPrice = t.en[0] || 0; // Termino de Energía (€/kWh) -> t.en[0] (K:10)
+
+                 // 1. CÁLCULO TÉRMINO FIJO
+                 const fixedPriceDaily = fixedPriceAnnual / 365;
+                 cP = fixedPriceDaily * days;
+
+                 // 2. CÁLCULO TÉRMINO DE ENERGÍA (Consumo)
+                 cE = consumption * energyPrice * (1 - (t.en_discount || 0));
+
+            } else {
+                 // ** CÁLCULO PARA ELECTRICIDAD (TD/HV) **
+                for(let i=0; i<pPeriods; i++) {
+                    const kw = inp[`p${i+1}_kw`];
+                    const annualPrice = t.pow_an[i]||0; 
+                    const dailyPriceDiscounted = (annualPrice * (1-(t.pow_discount||0))) / 365;
+                    cP += (kw || 0) * state.config.days * dailyPriceDiscounted;
+                }
+                for(let i=0; i<ePeriods; i++) {
+                    const kwh = inp[`p${i+1}_kwh`];
+                    const priceDiscounted = (t.en[i]||0) * (1-(t.en_discount||0));
+                    cE += (kwh || 0) * priceDiscounted;
+                }
             }
-            for(let i=0; i<ePeriods; i++) {
-                const kwh = inp[`p${i+1}_kwh`]||0;
-                const priceDiscounted = (t.en[i]||0) * (1-(t.en_discount||0));
-                cE += kwh * priceDiscounted;
-            }
+            
             return { power: cP, energy: cE, total: roundInternal(cP + cE) };
         }
         
-        function calculateTaxes(b) {
-            const ie = b*0.05; 
-            const iva = (b+ie)*0.21;
-            return { ie: roundInternal(ie), base_imponible: roundInternal(b), iva: roundInternal(iva), total_periodo: roundInternal(b+ie+iva) };
+        function calculateTaxes(b, tariffModel) {
+            let ie = 0;
+            const m = tariffModel.toUpperCase();
+
+            if (m.includes('RL')) {
+                 // ** IMPUESTOS PARA GAS RLx **
+                 // b: Base Imponible, que ya incluye el Impuesto HC en el Gas.
+                 // Impuesto HC = Consumo * 0.00234
+                 const consumption = state.inputs.p1_kwh || 0;
+                 ie = consumption * IMPUESTO_HC_RATE; // En este contexto, 'ie' representa el Impuesto HC para el reporte
+                 
+                 // La base imponible para el IVA debe ser la suma de (T.Fijo + T.Energía + Impuesto HC)
+                 // Como 'b' en este punto ya es (T.Fijo + T.Energía + Impuesto HC),
+                 // usamos 'b' para calcular el IVA.
+                 
+            } else {
+                 // ** IMPUESTOS PARA ELECTRICIDAD **
+                 // Impuesto Eléctrico (5% sobre Potencia + Energía Base)
+                 ie = (b) * 0.05;
+            }
+
+            // Cálculo del IVA (21% sobre Base Imponible + Impuesto Eléctrico / Impuesto HC)
+            const baseForIVA = b + (m.includes('RL') ? 0 : ie); // Si es GAS, el Impuesto HC (ie) ya está incluido en 'b'
+
+            const iva = baseForIVA * IVA_RATE;
+            
+            // Base Imponible Real (antes de IVA, después de IE/Imp.HC)
+            const realBaseImponible = b + (m.includes('RL') ? 0 : ie);
+            
+            return { 
+                ie: roundInternal(m.includes('RL') ? ie : ie), 
+                base_imponible: roundInternal(realBaseImponible), // Base Imponible para el reporte
+                iva: roundInternal(iva), 
+                total_periodo: roundInternal(realBaseImponible + iva),
+                isGas: m.includes('RL')
+            };
         }
 
         function calculate() {
@@ -908,16 +954,32 @@
             if(!state.config.segmentFilter) return showNotification("Falta seleccionar Segmento", 'error');
             if(!state.config.zoneFilter) return showNotification("Falta seleccionar Zona Geográfica", 'error'); // NUEVO: Validación de zona
             
+            const days = state.config.days;
+            const tariffModel = state.config.tariff;
+
+            if (tariffModel === 'GAS-RL' && (!state.inputs.p1_kwh || state.inputs.p1_kwh <= 0)) {
+                 return showNotification("Falta Consumo de Gas (kWh/Sm3)", 'error');
+            }
+            if (!tariffModel.includes('GAS') && state.inputs.clientTotalInvoice <= 0) {
+                 return showNotification("Falta Total Factura (Electricidad)", 'error');
+            }
+
+
             if(state.config.isMultiCupsMode && (!state.inputs.cups || !state.inputs.clientName)) {
                  return showNotification("En modo Multi-CUPS, se requiere Nombre Cliente y CUPS para el estudio.", 'error');
             }
 
-            const annF = state.config.days===31 ? 12 : (365/state.config.days);
+            const annF = days===31 ? 12 : (365/days);
             let curTotal = 0, curAnn = 0, curBase = null;
 
             const t = state.inputs.clientTotalInvoice;
-            if(!t) return showNotification("Falta Total Factura", 'error');
-            curTotal = t; curAnn = roundInternal(t * annF);
+            // Cálculo del coste actual del cliente (solo funciona para electricidad con el QR de 2.0TD)
+            // Se mantiene el cálculo basado en el total de la factura para que el ahorro sea exacto.
+            curTotal = t; 
+            curAnn = roundInternal(t * annF);
+            // La base imponible actual del cliente es la factura total sin impuestos (21% IVA + 5% IE)
+            // Para el cálculo de Gas, la Base Imponible del cliente no se necesita de forma tan estricta, pero se mantiene la estructura.
+            // (1 + 0.05) * (1 + 0.21) = 1.05 * 1.21 = 1.2705
             curBase = { total: t / 1.2705 }; 
 
             const isDrkBrand = state.config.brand === 'DRK';
@@ -929,8 +991,14 @@
                 const fz = state.config.zoneFilter; // Nuevo filtro de zona
                 const m = state.config.tariff; 
                 
-                if(!t.model.toUpperCase().includes(m)) return false;
-
+                // Filtro por Modelo: Electricidad (2.0TD, 3.0TD, 6.1TD) o Gas (RLx)
+                // Para GAS, filtramos cualquier modelo que contenga 'RL' (RL1, RL2, etc.)
+                if (m === 'GAS-RL') {
+                    if (!t.model.toUpperCase().includes('RL')) return false;
+                } else {
+                    if (!t.model.toUpperCase().includes(m)) return false;
+                }
+                
                 // --- INICIO: CORRECCIÓN PARA DRK ENERGÍA ---
                 if (isDrkBrand) {
                     const retailerUpper = t.retailer.toUpperCase();
@@ -946,8 +1014,6 @@
                 // --- FIN: FILTRO DE ZONA GEOGRÁFICA ---
 
                 // --- INICIO: CORRECCIÓN LÓGICA DE FILTRO DE SEGMENTO (COLUMNA AI) ---
-                // Aplicamos la regla: si el segmento del filtro (f) contiene una o más letras que
-                // coincidan con las letras del segmento de la tarifa (s), se considera un match.
                 if (f) {
                     const filterChars = f.split(''); // Ej: ['A', 'R']
                     let segmentMatchFound = false;
@@ -970,10 +1036,25 @@
                 
                 return true;
             }).map(t => {
+                // 1. Calcular Coste Base (Potencia + Energía) ANTES de impuestos
                 const b = calculateTariffCost(t, state.inputs);
-                const tx = calculateTaxes(b.total);
+                
+                // 2. Calcular Impuestos y Total del Periodo
+                const tx = calculateTaxes(b.total, t.model);
+                
+                // 3. Calcular Coste Anual y Ahorro
                 const ann = roundInternal(tx.total_periodo * annF);
-                return { ...t, periodCost: tx.total_periodo, annualCost: ann, savings: roundInternal(curAnn - ann), taxes: tx, base_cost: b, tariffDetails: t };
+                const savings = roundInternal(curAnn - ann);
+                
+                return { 
+                    ...t, 
+                    periodCost: tx.total_periodo, 
+                    annualCost: ann, 
+                    savings: savings, 
+                    taxes: tx, 
+                    base_cost: b, 
+                    tariffDetails: t 
+                };
             }).sort((a,b) => b.savings - a.savings);
 
             if(!res.length) return showNotification("Sin resultados", 'info');
@@ -1009,20 +1090,39 @@
 
             const getPrices = (t) => {
                 const pp = [], pe = [];
-                for(let i=0; i<pPeriodsCount; i++) pp.push( (t.pow_an[i]*(1-t.pow_discount))/365 ); 
-                for(let i=0; i<ePeriodsCount; i++) pe.push( t.en[i]*(1-t.en_discount) ); 
+                // Si es Gas, solo el primer periodo de potencia (anual) y el primer periodo de energía (total) son relevantes
+                if (plan.model.toUpperCase().includes('RL')) {
+                    // T. Fijo Diario: (T.Fijo Anual * (1 - Desc. Potencia)) / 365
+                    pp.push( (t.pow_an[0]*(1-t.pow_discount))/365 );
+                    // T. Energía: T. Energía Base * (1 - Desc. Energía)
+                    pe.push( t.en[0]*(1-t.en_discount) );
+                } else {
+                    for(let i=0; i<pPeriodsCount; i++) pp.push( (t.pow_an[i]*(1-t.pow_discount))/365 ); 
+                    for(let i=0; i<ePeriodsCount; i++) pe.push( t.en[i]*(1-t.en_discount) ); 
+                }
                 return { pp, pe };
             };
             
             const prices = getPrices(plan.tariffDetails); 
             let priceDetails = '';
+            const isGas = plan.model.toUpperCase().includes('RL');
+            
+            if (isGas) {
+                // Para GAS
+                priceDetails += `Término Fijo Diario (€/día): ${formatCurrency(prices.pp[0], 8)}\n`;
+                priceDetails += `Término Energía (€/kWh): ${formatCurrency(prices.pe[0], 8)}\n`;
+                priceDetails += `Impuesto HC (Constante): ${formatCurrency(IMPUESTO_HC_RATE, 8)} €/kWh\n`;
 
-            for (let i = 0; i < pPeriodsCount; i++) {
-                priceDetails += `P${i+1} (Potencia - €/kW/día): ${formatCurrency(prices.pp[i], 8)}\n`;
+            } else {
+                 // Para Electricidad
+                for (let i = 0; i < pPeriodsCount; i++) {
+                    priceDetails += `P${i+1} (Potencia - €/kW/día): ${formatCurrency(prices.pp[i], 8)}\n`;
+                }
+                for (let i = 0; i < ePeriodsCount; i++) {
+                    priceDetails += `E${i+1} (Energía - €/kWh): ${formatCurrency(prices.pe[i], 8)}\n`;
+                }
             }
-            for (let i = 0; i < ePeriodsCount; i++) {
-                priceDetails += `E${i+1} (Energía - €/kWh): ${formatCurrency(prices.pe[i], 8)}\n`;
-            }
+
 
             return priceDetails;
         }
@@ -1033,6 +1133,9 @@
             
             const subject = `${company} / ${state.inputs.clientName} / CUPS: ${state.inputs.cups} / Aceptacion de oferta`;
             const priceDetails = getPricesForMail(plan);
+            const isGas = plan.model.toUpperCase().includes('RL');
+            const totalConsumption = state.inputs.p1_kwh + state.inputs.p2_kwh + state.inputs.p3_kwh + state.inputs.p4_kwh + state.inputs.p5_kwh + state.inputs.p6_kwh;
+
 
             const body = 
 `Estimados ${company},
@@ -1045,6 +1148,7 @@ Comercializadora y Tarifa: ${plan.retailer} - ${plan.name} (${plan.model})
 Zona Geográfica: ${plan.zone}
 Ahorro Anual Estimado: ${formatCurrency(plan.savings, 0)} €
 Total Mensual Estimado: ${formatCurrency(plan.periodCost, 2)} €
+Consumo Total Facturado: ${formatCurrency(totalConsumption, 0)} ${isGas ? 'kWh/Sm3' : 'kWh'}
 
 --- DETALLE DE PRECIOS (€) ---
 ${priceDetails.trim()}
@@ -1177,37 +1281,74 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             const ePeriods = periods.e;
             const days = state.config.days;
             const inputs = studyInputs; 
+            const isGas = plan.model.toUpperCase().includes('RL');
             
             const getPrices = (t) => {
                 const pp = [], pe = [];
-                for(let i=0; i<t.pow_an.length; i++) pp.push( (t.pow_an[i]*(1-t.pow_discount))/365 );
-                for(let i=0; i<t.en.length; i++) pe.push( t.en[i]*(1-t.en_discount) );
+                if (isGas) {
+                    pp.push( (t.tariffDetails.pow_an[0]*(1-t.tariffDetails.pow_discount))/365 );
+                    pe.push( t.tariffDetails.en[0]*(1-t.tariffDetails.en_discount) );
+                } else {
+                    for(let i=0; i<pPeriods; i++) pp.push( (t.tariffDetails.pow_an[i]*(1-t.tariffDetails.pow_discount))/365 );
+                    for(let i=0; i<ePeriods; i++) pe.push( t.tariffDetails.en[i]*(1-t.tariffDetails.en_discount) );
+                }
                 return { pp, pe };
             };
-            const prices = getPrices(plan.tariffDetails);
+            const prices = getPrices(plan);
 
-            const simData = { power: [], energy: [], totals: plan.taxes };
+            const simData = { power: [], energy: [], taxes: plan.taxes, baseImponible: plan.taxes.base_imponible };
 
-            for (let i = 0; i < pPeriods; i++) {
-                const kw = inputs[`p${i+1}_kw`] || 0;
-                const dailyPrice = prices.pp[i] || 0; 
-                const cost = kw * days * dailyPrice;
-                simData.power.push({
-                    name: `P${i+1}`,
-                    formula: `${formatCurrency(kw, 3)} kW x ${days} días x ${formatCurrency(dailyPrice, 8)} €/kW/día`,
-                    cost: cost,
-                });
+            // DETALLE POTENCIA / TERMINO FIJO
+            if (isGas) {
+                 // GAS: TÉRMINO FIJO ANUAL
+                 const fixedPriceAnnual = plan.tariffDetails.pow_an[0] || 0;
+                 const fixedPriceDaily = prices.pp[0] || 0;
+                 const cost = fixedPriceDaily * days;
+
+                 simData.power.push({
+                     name: `TÉRMINO FIJO (RL)`,
+                     formula: `${formatCurrency(fixedPriceAnnual, 3)} €/año x ${days} días / 365 días`,
+                     cost: cost,
+                 });
+            } else {
+                // ELECTRICIDAD
+                for (let i = 0; i < pPeriods; i++) {
+                    const kw = inputs[`p${i+1}_kw`] || 0;
+                    const dailyPrice = prices.pp[i] || 0; 
+                    const cost = kw * days * dailyPrice;
+                    simData.power.push({
+                        name: `P${i+1}`,
+                        formula: `${formatCurrency(kw, 3)} kW x ${days} días x ${formatCurrency(dailyPrice, 8)} €/kW/día`,
+                        cost: cost,
+                    });
+                }
             }
 
-            for (let i = 0; i < ePeriods; i++) {
-                const kwh = inputs[`p${i+1}_kwh`] || 0;
-                const kwhPrice = prices.pe[i] || 0; 
-                const cost = kwh * kwhPrice;
-                simData.energy.push({
-                    name: `E${i+1}`,
-                    formula: `${formatCurrency(kwh, 0)} kWh x ${formatCurrency(kwhPrice, 8)} €/kWh`,
-                    cost: cost,
-                });
+            // DETALLE ENERGÍA / CONSUMO
+            if (isGas) {
+                 // GAS: TÉRMINO ENERGÍA (Consumo Total)
+                 const kwh = inputs.p1_kwh || 0; // Consumo total
+                 const kwhPrice = prices.pe[0] || 0; 
+                 const cost = kwh * kwhPrice;
+                 
+                 simData.energy.push({
+                     name: `CONSUMO TOTAL`,
+                     formula: `${formatCurrency(kwh, 0)} kWh/Sm3 x ${formatCurrency(kwhPrice, 8)} €/kWh`,
+                     cost: cost,
+                 });
+
+            } else {
+                 // ELECTRICIDAD
+                for (let i = 0; i < ePeriods; i++) {
+                    const kwh = inputs[`p${i+1}_kwh`] || 0;
+                    const kwhPrice = prices.pe[i] || 0; 
+                    const cost = kwh * kwhPrice;
+                    simData.energy.push({
+                        name: `E${i+1}`,
+                        formula: `${formatCurrency(kwh, 0)} kWh x ${formatCurrency(kwhPrice, 8)} €/kWh`,
+                        cost: cost,
+                    });
+                }
             }
 
             return simData;
@@ -1223,14 +1364,13 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             const cBorder = '#fdba74'; 
             const cTableHead = cPrimary; 
             const cTextDark = '#111827'; 
-            
             const cSavingsHighlight = cAccent; 
             const cOfferButton = cPrimary; 
 
             let ranked = [];
             const winningPlan = state.result.bestPlan; 
             const winningPlanId = state.config.winningTariffId;
-            const isSingleMode = state.config.isSinglePresentationMode;
+            const isSingleMode = state.config.isSinglePresentationMode || plan.model.toUpperCase().includes('RL'); // Forzar modo simple si es Gas
 
             if(isSingleMode) {
                 ranked = [winningPlan];
@@ -1263,12 +1403,20 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             
             const periods = getTariffPeriods(plan.model);
             const pPeriodsCount = periods.p;
-            const ePeriodsCount = periods.p; // Corregido: Debe ser periods.e (Aunque para 2.0TD es 3)
+            const ePeriodsCount = periods.e; 
+            const isGas = plan.model.toUpperCase().includes('RL');
+
 
             const getPrices = (t) => {
                 const pp = [], pe = [];
-                for(let i=0; i<pPeriodsCount; i++) pp.push( (t.tariffDetails.pow_an[i]*(1-t.tariffDetails.pow_discount))/365 );
-                for(let i=0; i<ePeriodsCount; i++) pe.push( t.tariffDetails.en[i]*(1-t.tariffDetails.en_discount) );
+                // Se recalcula aquí para la tabla comparativa
+                if (isGas) {
+                    pp.push( (t.tariffDetails.pow_an[0]*(1-t.tariffDetails.pow_discount))/365 );
+                    pe.push( t.tariffDetails.en[0]*(1-t.tariffDetails.en_discount) );
+                } else {
+                    for(let i=0; i<pPeriodsCount; i++) pp.push( (t.tariffDetails.pow_an[i]*(1-t.tariffDetails.pow_discount))/365 );
+                    for(let i=0; i<ePeriodsCount; i++) pe.push( t.tariffDetails.en[i]*(1-t.tariffDetails.en_discount) );
+                }
                 return { pp, pe };
             };
 
@@ -1277,14 +1425,33 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 ${compareCols.map(c => `<th style="padding:8px;text-align:center">${c.retailer}</th>`).join('')}
             </tr></thead><tbody>`;
             
-            for(let i=0; i<pPeriodsCount; i++) {
-                compTableHtml += `<tr style="background:${i%2===0?'#fff':cBgLight}"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Potencia P${i+1} (€/kW/día)</td>
-                ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(getPrices(c).pp[i],6)}</td>`).join('')}</tr>`;
+            // FILAS DE POTENCIA / TÉRMINO FIJO
+            if (isGas) {
+                 compTableHtml += `<tr style="background:#fff"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Término Fijo Diario (€/día)</td>
+                 ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(getPrices(c).pp[0],6)}</td>`).join('')}</tr>`;
+            } else {
+                for(let i=0; i<pPeriodsCount; i++) {
+                    compTableHtml += `<tr style="background:${i%2===0?'#fff':cBgLight}"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Potencia P${i+1} (€/kW/día)</td>
+                    ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(getPrices(c).pp[i],6)}</td>`).join('')}</tr>`;
+                }
             }
-            for(let i=0; i<ePeriodsCount; i++) {
-                compTableHtml += `<tr style="background:${i%2===0?'#fff':cBgLight};border-top:1px solid #eee"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Energía E${i+1} (€/kWh)</td>
-                ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(getPrices(c).pe[i],6)}</td>`).join('')}</tr>`;
+
+            // FILAS DE ENERGÍA / CONSUMO
+            if (isGas) {
+                 compTableHtml += `<tr style="background:#fff;border-top:1px solid #eee"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Término Energía (€/kWh)</td>
+                 ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(getPrices(c).pe[0],6)}</td>`).join('')}</tr>`;
+            } else {
+                for(let i=0; i<ePeriodsCount; i++) {
+                    compTableHtml += `<tr style="background:${i%2===0?'#fff':cBgLight};border-top:1px solid #eee"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Energía E${i+1} (€/kWh)</td>
+                    ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(getPrices(c).pe[i],6)}</td>`).join('')}</tr>`;
+                }
             }
+            
+            if (isGas) {
+                compTableHtml += `<tr style="background:#fff"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Impuesto HC (€/kWh)</td>
+                ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(IMPUESTO_HC_RATE, 6)}</td>`).join('')}</tr>`;
+            }
+
             compTableHtml += `<tr style="border-top:2px solid ${cAccent};background:#fff7ed;font-weight:bold"><td style="padding:8px;color:${cAccent}">AHORRO ANUAL</td>
             ${compareCols.map(c => `<td style="padding:8px;text-align:center;color:${cAccent}">${formatCurrency(c.savings,0)} €</td>`).join('')}</tr>`;
             compTableHtml += `</tbody></table>`;
@@ -1293,6 +1460,9 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             const simTotalBase = simData.power.reduce((a,b)=>a+b.cost,0) + simData.energy.reduce((a,b)=>b.cost,0);
             
             const mailtoLink = generateMailtoLink(plan);
+            const ieLabel = isGas ? 'Impuesto HC' : 'Impuesto Eléctrico (5%)';
+            const ieCost = isGas ? plan.taxes.ie : plan.taxes.base_imponible - simTotalBase; // Ajuste para el Impuesto HC/IE
+
 
             const simHtml = `
                 <div style="font-size: 12px; color: ${cTextDark};">
@@ -1301,7 +1471,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                     </h4>
 
                     <table style="width:100%; border-collapse: collapse; margin-top: 10px;">
-                        <tr style="background:${cPrimary}; color: white; font-weight: bold;"><td colspan="3" style="padding: 6px;">TÉRMINO POTENCIA (Potencia x Días x Precio Diario) - ${pPeriodsCount} Periodos</td></tr>
+                        <tr style="background:${cPrimary}; color: white; font-weight: bold;"><td colspan="3" style="padding: 6px;">${isGas ? 'TÉRMINO FIJO Y ENERGÍA' : `TÉRMINO POTENCIA (${pPeriodsCount} Periodos)`}</td></tr>
                         ${simData.power.map(r => `
                             <tr style="border-bottom: 1px dashed #ddd; background: #fafafa;">
                                 <td style="padding: 4px 8px; font-weight: bold; width: 10%;">${r.name}</td>
@@ -1309,9 +1479,9 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                                 <td style="text-align: right; padding: 4px 8px; width: 25%; font-weight: bold;">${formatCurrency(r.cost, 4)} €</td>
                             </tr>
                         `).join('')}
-                        <tr style="font-weight: bold; background: #e2e8f0;"><td colspan="2" style="padding: 6px 8px; text-align: right;">SUBTOTAL POTENCIA</td><td style="text-align: right; padding: 6px 8px;">${formatCurrency(simData.power.reduce((a,b)=>a+b.cost,0), 4)} €</td></tr>
+                        <tr style="font-weight: bold; background: #e2e8f0;"><td colspan="2" style="padding: 6px 8px; text-align: right;">SUBTOTAL ${isGas ? 'FIJO' : 'POTENCIA'}</td><td style="text-align: right; padding: 6px 8px;">${formatCurrency(simData.power.reduce((a,b)=>a+b.cost,0), 4)} €</td></tr>
                         
-                        <tr style="background:${cPrimary}; color: white; font-weight: bold; border-top: 2px solid #fff;"><td colspan="3" style="padding: 6px;">TÉRMINO ENERGÍA (Consumo x Precio €/kWh) - ${ePeriodsCount} Periodos</td></tr>
+                        <tr style="background:${cPrimary}; color: white; font-weight: bold; border-top: 2px solid #fff;"><td colspan="3" style="padding: 6px;">${isGas ? 'TÉRMINO DE ENERGÍA (CONSUMO)' : `TÉRMINO ENERGÍA (${ePeriodsCount} Periodos)`}</td></tr>
                         ${simData.energy.map(r => `
                             <tr style="border-bottom: 1px dashed #ddd; background: #fafafa;">
                                 <td style="padding: 4px 8px; font-weight: bold;">${r.name}</td>
@@ -1319,10 +1489,15 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                                 <td style="text-align: right; padding: 4px 8px; font-weight: bold;">${formatCurrency(r.cost, 4)} €</td>
                             </tr>
                         `).join('')}
-                        <tr style="font-weight: bold; background: #e2e8f0;"><td colspan="2" style="padding: 6px 8px; text-align: right;">SUBTOTAL ENERGÍA</td><td style="text-align: right; padding: 6px 8px;">${formatCurrency(simData.energy.reduce((a,b)=>a+b.cost,0), 4)} €</td></tr>
+                        <tr style="font-weight: bold; background: #e2e8f0;"><td colspan="2" style="padding: 6px 8px; text-align: right;">SUBTOTAL ${isGas ? 'CONSUMO' : 'ENERGÍA'}</td><td style="text-align: right; padding: 6px 8px;">${formatCurrency(simData.energy.reduce((a,b)=>a+b.cost,0), 4)} €</td></tr>
                         
-                        <tr style="font-weight: bold; background: ${cBgLight}; border-top: 2px solid ${cAccent};"><td colspan="2" style="padding: 6px 8px; text-align: right; color: ${cPrimary};">BASE IMPONIBLE (Potencia + Energía)</td><td style="text-align: right; padding: 6px 8px; color: ${cPrimary};">${formatCurrency(simTotalBase, 4)} €</td></tr>
-                        <tr><td colspan="2" style="padding: 4px 8px; text-align: right;">+ Impuesto Eléctrico (5%)</td><td style="text-align: right; padding: 4px 8px;">${formatCurrency(plan.taxes.ie, 4)} €</td></tr>
+                        <!-- IMPUESTOS ESPECIALES (IE o Impuesto HC) -->
+                        <tr>
+                            <td colspan="2" style="padding: 4px 8px; text-align: right;">+ ${ieLabel}</td>
+                            <td style="text-align: right; padding: 4px 8px;">${formatCurrency(ieCost, 4)} €</td>
+                        </tr>
+
+                        <tr style="font-weight: bold; background: ${cBgLight}; border-top: 2px solid ${cAccent};"><td colspan="2" style="padding: 6px 8px; text-align: right; color: ${cPrimary};">BASE IMPONIBLE (P+E + ${isGas ? 'Impuesto HC' : 'Impuesto Eléctrico'})</td><td style="text-align: right; padding: 6px 8px; color: ${cPrimary};">${formatCurrency(plan.taxes.base_imponible, 4)} €</td></tr>
                         <tr><td colspan="2" style="padding: 4px 8px; text-align: right;">+ IVA (21%)</td><td style="text-align: right; padding: 4px 8px;">${formatCurrency(plan.taxes.iva, 4)} €</td></tr>
                         
                         <!-- UNIFICADO: TOTAL ANUAL (Fondo cPrimary) -->
@@ -1507,7 +1682,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             let totalSavings = 0;
             let totalCurrentAnnualCost = 0;
             let totalNewAnnualCost = 0;
-            const savingsByTariff = { '2.0TD': 0, '3.0TD': 0, '6.1TD': 0, 'OTHER': 0 }; 
+            const savingsByTariff = { '2.0TD': 0, '3.0TD': 0, '6.1TD': 0, 'GAS-RL': 0, 'OTHER': 0 }; 
 
             state.multiCupsData.forEach(cups => {
                 const savings = parseFloat(cups.savings) || 0;
@@ -1557,9 +1732,10 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                         <h4 style="font-weight:bold;color:${cPrimary};margin-bottom:10px; font-size: 14px;">AHORRO DESGLOSADO POR MODELO DE TARIFA:</h4>
                         <table border="0" cellpadding="0" cellspacing="0" style="width:100%; font-size: 18px; font-weight: bold; color: ${cPrimary};">
                             <tr>
-                                <td style="width:33%; text-align:center;">2.0TD: <span style="color: ${cAccent}">${formatCurrency(savingsByTariff['2.0TD'], 0)} €</span></td>
-                                <td style="width:33%; text-align:center;">3.0TD: <span style="color: ${cAccent}">${formatCurrency(savingsByTariff['3.0TD'], 0)} €</span></td>
-                                <td style="width:33%; text-align:center;">6.1TD: <span style="color: ${cAccent}">${formatCurrency(savingsByTariff['6.1TD'], 0)} €</span></td>
+                                <td style="width:25%; text-align:center;">2.0TD: <span style="color: ${cAccent}">${formatCurrency(savingsByTariff['2.0TD'], 0)} €</span></td>
+                                <td style="width:25%; text-align:center;">3.0TD: <span style="color: ${cAccent}">${formatCurrency(savingsByTariff['3.0TD'], 0)} €</span></td>
+                                <td style="width:25%; text-align:center;">6.1TD: <span style="color: ${cAccent}">${formatCurrency(savingsByTariff['6.1TD'], 0)} €</span></td>
+                                <td style="width:25%; text-align:center;">GAS-RL: <span style="color: ${cAccent}">${formatCurrency(savingsByTariff['GAS-RL'], 0)} €</span></td>
                             </tr>
                         </table>
                     </div>
@@ -1567,7 +1743,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             `;
 
             const orderModel = (a, b) => {
-                const order = { '2.0TD': 1, '3.0TD': 2, '6.1TD': 3, 'OTHER': 4 };
+                const order = { '2.0TD': 1, '3.0TD': 2, '6.1TD': 3, 'GAS-RL': 4, 'OTHER': 5 };
                 const aModel = getTariffCategory(a.tariffModel);
                 const bModel = getTariffCategory(b.tariffModel);
                 
@@ -1609,34 +1785,48 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 
                 const simData = getDetailedSimulacroData(plan, cups.inputs); 
                 const simTotalBase = simData.power.reduce((a,b)=>a+b.cost,0) + simData.energy.reduce((a,b)=>b.cost,0);
+                const isGas = plan.model.toUpperCase().includes('RL');
 
                 const periods = getTariffPeriods(plan.tariffModel);
                 const pPeriodsCount = periods.p;
-                const ePeriodsCount = periods.e; // Corregido
+                const ePeriodsCount = periods.e; 
 
                 const getPrices = (t) => {
                     const pp = [], pe = [];
-                    for(let i=0; i<pPeriodsCount; i++) pp.push( (t.plan.tariffDetails.pow_an[i]*(1-t.plan.tariffDetails.pow_discount))/365 );
-                    for(let i=0; i<ePeriodsCount; i++) pe.push( t.plan.tariffDetails.en[i]*(1-t.plan.tariffDetails.en_discount) );
+                    if (isGas) {
+                        pp.push( (t.plan.tariffDetails.pow_an[0]*(1-t.plan.tariffDetails.pow_discount))/365 );
+                        pe.push( t.plan.tariffDetails.en[0]*(1-t.plan.tariffDetails.en_discount) );
+                    } else {
+                        for(let i=0; i<pPeriodsCount; i++) pp.push( (t.plan.tariffDetails.pow_an[i]*(1-t.plan.tariffDetails.pow_discount))/365 );
+                        for(let i=0; i<ePeriodsCount; i++) pe.push( t.plan.tariffDetails.en[i]*(1-t.plan.tariffDetails.en_discount) );
+                    }
                     return { pp, pe };
                 };
                 const prices = getPrices(cups);
 
+                const ieLabel = isGas ? 'Impuesto HC' : 'Impuesto Eléctrico (5%)';
+                const ieCost = isGas ? plan.taxes.ie : plan.taxes.base_imponible - simTotalBase; // Ajuste para el Impuesto HC/IE
                 
                 let pricesHtml = `<table style="width:100%; border-collapse: collapse; font-size: 10px; margin-top: 5px;">
                     <tr style="background:#f3f4f6; font-weight:bold"><td style="padding:4px">CONCEPTO</td><td style="padding:4px; text-align:right">PRECIO (€)</td></tr>`;
                 
-                for (let i = 0; i < pPeriodsCount; i++) {
-                    pricesHtml += `<tr><td style="padding:3px; color:${cPrimary}">Potencia P${i+1} (€/kW/día)</td><td style="padding:3px; text-align:right">${formatCurrency(prices.pp[i], 8)}</td></tr>`;
-                }
-                for (let i = 0; i < ePeriodsCount; i++) {
-                    pricesHtml += `<tr><td style="padding:3px; color:${cPrimary}">Energía E${i+1} (€/kWh)</td><td style="padding:3px; text-align:right">${formatCurrency(prices.pe[i], 8)}</td></tr>`;
+                if (isGas) {
+                    pricesHtml += `<tr><td style="padding:3px; color:${cPrimary}">T. Fijo Diario (€/día)</td><td style="padding:3px; text-align:right">${formatCurrency(prices.pp[0], 8)}</td></tr>`;
+                    pricesHtml += `<tr><td style="padding:3px; color:${cPrimary}">T. Energía (€/kWh)</td><td style="padding:3px; text-align:right">${formatCurrency(prices.pe[0], 8)}</td></tr>`;
+                    pricesHtml += `<tr><td style="padding:3px; color:${cPrimary}">Impuesto HC (€/kWh)</td><td style="padding:3px; text-align:right">${formatCurrency(IMPUESTO_HC_RATE, 8)}</td></tr>`;
+                } else {
+                    for (let i = 0; i < pPeriodsCount; i++) {
+                        pricesHtml += `<tr><td style="padding:3px; color:${cPrimary}">Potencia P${i+1} (€/kW/día)</td><td style="padding:3px; text-align:right">${formatCurrency(prices.pp[i], 8)}</td></tr>`;
+                    }
+                    for (let i = 0; i < ePeriodsCount; i++) {
+                        pricesHtml += `<tr><td style="padding:3px; color:${cPrimary}">Energía E${i+1} (€/kWh)</td><td style="padding:3px; text-align:right">${formatCurrency(prices.pe[i], 8)}</td></tr>`;
+                    }
                 }
                 pricesHtml += `</table>`;
                 
                 const simulacroHtml = `
                     <table style="width:100%; border-collapse: collapse; font-size: 10px; margin-top: 10px;">
-                        <tr style="background:#7c2d12; color:white; font-weight: bold;"><td colspan="3" style="padding: 4px;">TÉRMINO POTENCIA (${simData.power.length}P)</td></tr>
+                        <tr style="background:#7c2d12; color:white; font-weight: bold;"><td colspan="3" style="padding: 4px;">TÉRMINO FIJO (Potencia)</td></tr>
                         ${simData.power.map(r => `
                             <tr style="border-bottom: 1px dashed #eee; background: #fafafa;">
                                 <td style="padding: 2px 4px; width: 10%;">${r.name}</td>
@@ -1645,7 +1835,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                             </tr>
                         `).join('')}
                         
-                        <tr style="background:#7c2d12; color:white; font-weight: bold;"><td colspan="3" style="padding: 4px;">TÉRMINO ENERGÍA (${simData.energy.length}E)</td></tr>
+                        <tr style="background:#7c2d12; color:white; font-weight: bold;"><td colspan="3" style="padding: 4px;">TÉRMINO ENERGÍA (Consumo)</td></tr>
                         ${simData.energy.map(r => `
                             <tr style="border-bottom: 1px dashed #eee; background: #fafafa;">
                                 <td style="padding: 2px 4px;">${r.name}</td>
@@ -1654,7 +1844,13 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                             </tr>
                         `).join('')}
                         
-                        <tr style="font-weight: bold; background: #e2e8f0;"><td colspan="2" style="padding: 4px 8px; text-align: right; color: ${cPrimary};">BASE IMPONIBLE (P+E)</td><td style="text-align: right; padding: 4px 8px; color: ${cPrimary};">${formatCurrency(simTotalBase, 4)} €</td></tr>
+                        <!-- IMPUESTOS ESPECIALES (IE o Impuesto HC) -->
+                        <tr>
+                            <td colspan="2" style="padding: 4px 8px; text-align: right;">+ ${ieLabel}</td>
+                            <td style="text-align: right; padding: 4px 8px;">${formatCurrency(ieCost, 4)} €</td>
+                        </tr>
+
+                        <tr style="font-weight: bold; background: #e2e8f0;"><td colspan="2" style="padding: 4px 8px; text-align: right; color: ${cPrimary};">BASE IMPONIBLE (P+E + ${isGas ? 'Impuesto HC' : 'Impuesto Eléctrico'})</td><td style="text-align: right; padding: 4px 8px; color: ${cPrimary};">${formatCurrency(plan.taxes.base_imponible, 4)} €</td></tr>
                         
                         <!-- UNIFICADO: Total Mes (Fondo cAccent) -->
                         <tr style="background:${cAccent}; color: white; font-weight: bold; font-size: 11px;">
@@ -2046,8 +2242,8 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             
             // --- INICIO: CORRECCIÓN DE DÍAS VISIBLES EN EL INPUT DE CABECERA ---
             const daysInput = document.getElementById('days-input');
-            if (daysInput && state.config.tariff === '2.0TD' && daysInput.value !== String(state.config.days)) {
-                // Forzar la actualización del valor del DOM si la tarifa es 2.0TD (deshabilitada) y el valor ha cambiado.
+            if (daysInput && daysInput.value !== String(state.config.days)) {
+                // Forzar la actualización del valor del DOM con el valor del estado
                 daysInput.value = state.config.days;
             }
             // --- FIN: CORRECCIÓN DE DÍAS VISIBLES EN EL INPUT DE CABECERA ---
@@ -2079,13 +2275,13 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             
             // Filtra opciones de Segmento basadas en el modelo de tarifa actual
             const filteredSegmentOptions = [...new Set(state.uploadedTariffs
-                .filter(t => t.model.toUpperCase().includes(currentTariffModel))
+                .filter(t => getTariffCategory(t.model) === getTariffCategory(currentTariffModel))
                 .map(t => t.segment)
             )].sort();
 
             // Filtra opciones de Zona Geográfica basadas en el modelo de tarifa actual
             const filteredZoneOptions = [...new Set(state.uploadedTariffs
-                .filter(t => t.model.toUpperCase().includes(currentTariffModel))
+                .filter(t => getTariffCategory(t.model) === getTariffCategory(currentTariffModel))
                 .map(t => t.zone)
             )].sort();
 
@@ -2099,7 +2295,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
 
             const filteredWinningResults = allResults.filter(p => {
                 if (state.config.winningRetailerFilter && p.retailer !== state.config.winningRetailerFilter) return false;
-                if (!p.model.toUpperCase().includes(currentTariffModel)) return false;
+                if (getTariffCategory(p.model) !== getTariffCategory(currentTariffModel)) return false;
                 return true;
             });
             
@@ -2107,7 +2303,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
 
             const filteredRankingResults = allResults.filter(p => {
                 if (state.config.rankingRetailerFilter && p.retailer !== state.config.rankingRetailerFilter) return false;
-                if (!p.model.toUpperCase().includes(currentTariffModel)) return false;
+                if (getTariffCategory(p.model) !== getTariffCategory(currentTariffModel)) return false;
                 
                 if (winningPlan && p.savings > winningSavings) {
                     return false;
@@ -2211,8 +2407,8 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                         }).join('')}
                     </select>
 
-                    ${isDrkBrand || state.config.isMultiCupsMode ? 
-                        `<div class="pt-2 text-sm text-slate-500 font-medium">Modo ${isDrkBrand ? 'DRK ENERGÍA' : 'MULTI-CUPS'}: Oferta única forzada.</div>` :
+                    ${isDrkBrand || state.config.isMultiCupsMode || currentTariffModel === 'GAS-RL' ? 
+                        `<div class="pt-2 text-sm text-slate-500 font-medium">Modo ${isDrkBrand ? 'DRK ENERGÍA' : (state.config.isMultiCupsMode ? 'MULTI-CUPS' : 'GAS-RL')}: Oferta única forzada.</div>` :
                         `<div class="flex items-center justify-between pt-2">
                             <h4 class="font-bold text-slate-700 flex gap-2">${renderIcon('list-checks','w-4 h-4 text-slate-600')} 2. Ranking de Opciones (Max 5 / 1 por Cía)</h4>
                             <button onclick="resetRankingSelection()" class="text-xs text-red-500 hover:text-red-700 font-bold p-1 rounded-md flex items-center gap-1 border border-red-300 bg-red-50">
@@ -2252,17 +2448,52 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
 
         function renderClientInputs() {
             const currentTariffModel = state.config.tariff;
+            const isGas = currentTariffModel === 'GAS-RL';
+            const daysIsDisabled = currentTariffModel === '2.0TD' || isGas;
+
+            // Para GAS: solo necesitamos el Consumo Total (en p1_kwh) y el Total Factura
             const rows = [1,2,3,4,5,6].map(i => {
                 const is20 = currentTariffModel === '2.0TD';
+                
+                // Disabling/Hiding logic for Electricity
                 const pDis = is20 && i > 2; 
                 const eDis = is20 && i > 3; 
                 
-                if (is20 && i > 3) return ''; 
+                // Visibility logic for Gas
+                const hideRow = isGas && i > 1; // Solo mostramos la fila P1 para el consumo total de Gas
+                if (hideRow) return '';
+                
+                // Custom labels for Gas mode
+                const pLabel = isGas ? 'Término Fijo Anual (€/año)' : 'Potencia (kW)';
+                const eLabel = isGas ? 'Consumo Total (kWh/Sm3)' : 'Energía (kWh)';
+
 
                 return `<div class="grid grid-cols-12 gap-2 text-sm mb-1 items-center">
-                    <div class="col-span-1 font-bold text-slate-500 text-center bg-slate-100 rounded">P${i}</div>
-                    <div class="col-span-5"><input type="number" step="0.01" oninput="handleInputRaw('p${i}_kw', this.value)" onblur="handleInputBlur('p${i}_kw', this.value)" class="w-full p-1 border rounded outline-none focus:border-orange-500 ${pDis?'bg-slate-50':''}" placeholder="kW" value="${state.inputs[`p${i}_kw`]||''}" ${pDis?'disabled':''}></div>
-                    <div class="col-span-6"><input type="number" step="1" oninput="handleInputRaw('p${i}_kwh', this.value)" onblur="handleInputBlur('p${i}_kwh', this.value)" class="w-full p-1 border rounded outline-none focus:border-orange-500 ${eDis?'bg-slate-50':''}" placeholder="kWh" value="${state.inputs[`p${i}_kwh`]||''}" ${eDis?'disabled':''}></div>
+                    <div class="col-span-1 font-bold text-slate-500 text-center bg-slate-100 rounded">${isGas ? 'Consumo' : `P${i}`}</div>
+                    
+                    <!-- CAMPO POTENCIA / TÉRMINO FIJO ANUAL (Solo fila 1 en Gas) -->
+                    <div class="col-span-5">
+                       <input type="number" step="0.01" 
+                          oninput="handleInputRaw('p${i}_kw', this.value)" 
+                          onblur="handleInputBlur('p${i}_kw', this.value)" 
+                          class="w-full p-1 border rounded outline-none focus:border-orange-500 ${isGas && i===1 ? 'bg-orange-50' : (pDis?'bg-slate-50':'')}" 
+                          placeholder="${isGas && i===1 ? 'T.Fijo Anual (R)' : 'kW'}" 
+                          value="${state.inputs[`p${i}_kw`]||''}" 
+                          ${isGas && i!==1 ? 'disabled' : (pDis?'disabled':'')}
+                          title="${pLabel}">
+                    </div>
+                    
+                    <!-- CAMPO ENERGÍA / CONSUMO TOTAL (Solo fila 1 en Gas) -->
+                    <div class="col-span-6">
+                       <input type="number" step="1" 
+                          oninput="handleInputRaw('p${i}_kwh', this.value)" 
+                          onblur="handleInputBlur('p${i}_kwh', this.value)" 
+                          class="w-full p-1 border rounded outline-none focus:border-orange-500 ${isGas && i===1 ? 'bg-orange-50' : (eDis?'bg-slate-50':'')}" 
+                          placeholder="${isGas && i===1 ? 'Consumo (K)' : 'kWh'}" 
+                          value="${state.inputs[`p${i}_kwh`]||''}" 
+                          ${isGas && i!==1 ? 'disabled' : (eDis?'disabled':'')}
+                          title="${eLabel}">
+                    </div>
                 </div>`;
             }).join('');
             
@@ -2287,15 +2518,31 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             return `
             ${clientDataCard}
             <div class="bg-white p-4 rounded-xl shadow mb-6">
-                <h3 class="font-bold text-slate-700 mb-3 flex gap-2">${renderIcon('zap','w-4 h-4 text-yellow-500')} Datos Factura (${currentTariffModel})</h3>
+                <h3 class="font-bold text-slate-700 mb-3 flex gap-2">${renderIcon(isGas ? 'flame' : 'zap','w-4 h-4 text-orange-500')} Datos Factura (${currentTariffModel})</h3>
             
                 <div class="mb-4">${qrScannerButton}</div> 
 
+                <div class="mb-4">
+                   <label class="text-xs font-bold text-slate-500">Días Facturados (Bloqueado: ${daysIsDisabled ? 'Sí' : 'No'})</label>
+                   <input type="number" 
+                          id="days-input-local"
+                          value="${state.config.days}"
+                          onblur="handleConfigChange('days', this.value)"
+                          class="w-full p-2 text-lg font-bold border rounded focus:border-orange-500 ${daysIsDisabled ? 'bg-slate-100' : ''}" 
+                          placeholder="30"
+                          ${daysIsDisabled ? 'disabled' : ''}>
+                </div>
+                
                 <div class="mb-4"><label class="text-xs font-bold text-slate-500">Total Factura (€)</label><input type="number" step="0.01" oninput="handleInputRaw('clientTotalInvoice', this.value)" onblur="handleInputBlur('clientTotalInvoice', this.value)" class="w-full p-2 text-lg font-bold border rounded focus:border-orange-500" placeholder="0.00" value="${state.inputs.clientTotalInvoice||''}"></div>
             
                 ${codeInput}
 
-                <div class="grid grid-cols-12 gap-2 text-xs font-bold text-slate-400 mb-1 text-center"><div class="col-span-1"></div><div class="col-span-5">Potencia (kW)</div><div class="col-span-6">Energía (kWh)</div></div>${rows}
+                <div class="grid grid-cols-12 gap-2 text-xs font-bold text-slate-400 mb-1 text-center">
+                    <div class="col-span-1"></div>
+                    <div class="col-span-5">${isGas ? 'Término Fijo' : 'Potencia'}</div>
+                    <div class="col-span-6">${isGas ? 'Consumo' : 'Energía'}</div>
+                </div>
+                ${rows}
             </div>`;
         }
 
@@ -2396,16 +2643,16 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
     <div id="main-content-grid" class="min-h-screen p-4 max-w-5xl mx-auto">
         <header class="flex justify-between items-center mb-6">
             <h1 class="text-2xl font-black text-slate-800 tracking-tight">
-                <span id="main-brand" class="text-orange-600">${state.config.brand === 'DRK' ? 'DRK ENERGÍA' : 'POWER CUP'}</span> 
+                <span id="main-brand" class="text-orange-600"></span> 
                 <span class="text-slate-400 font-light text-lg">| Comparador V4.55</span>
             </h1>
             <div class="flex gap-4 items-center">
                 
                 <label class="flex items-center space-x-2 text-xs font-medium text-slate-700">
                     <input type="checkbox" id="multi-cups-toggle"
-                                                 onchange="handleMultiCupsModeChange(event)" 
-                                                 ${state.config.isMultiCupsMode ? 'checked' : ''} 
-                                                 class="rounded text-orange-600 focus:ring-orange-500">
+                                                    onchange="handleMultiCupsModeChange(event)" 
+                                                    ${state.config.isMultiCupsMode ? 'checked' : ''} 
+                                                    class="rounded text-orange-600 focus:ring-orange-500">
                     <span>Multi-CUPS</span>
                 </label>
                 
@@ -2415,26 +2662,27 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 </select>
 
                 <select onchange="handleTariffChange(event)" class="bg-white border rounded p-1 font-bold text-sm text-slate-600 shadow-sm">
+                    <option value="GAS-RL" ${state.config.tariff === 'GAS-RL' ? 'selected' : ''}>GAS RLx</option>
                     <option value="3.0TD" ${state.config.tariff === '3.0TD' ? 'selected' : ''}>3.0TD</option>
                     <option value="2.0TD" ${state.config.tariff === '2.0TD' ? 'selected' : ''}>2.0TD</option>
                     <option value="6.1TD" ${state.config.tariff === '6.1TD' ? 'selected' : ''}>6.1TD</option>
                 </select>
-                <!-- Días de facturación: Muestra el valor de estado. Sólo editable si NO es 2.0TD o si se edita el valor actual. -->
+                <!-- Días de facturación: Muestra el valor de estado. Ahora solo editable si NO es 2.0TD ni GAS-RL -->
                 <input type="number" 
                     id="days-input" 
                     value="${state.config.days}" 
                     onblur="handleConfigChange('days',this.value)" 
                     class="w-12 text-center border rounded p-1 font-bold text-sm text-slate-600 shadow-sm" 
                     title="Días Factura"
-                    ${state.config.tariff === '2.0TD' ? 'disabled' : ''}
+                    ${state.config.tariff === '2.0TD' || state.config.tariff === 'GAS-RL' ? 'disabled' : ''}
                     >
 
-                <label class="flex items-center space-x-2 text-xs font-medium text-slate-700 ${state.config.brand === 'DRK' ? 'opacity-50' : ''}">
+                <label class="flex items-center space-x-2 text-xs font-medium text-slate-700 ${state.config.brand === 'DRK' || state.config.tariff === 'GAS-RL' ? 'opacity-50' : ''}">
                     <input type="checkbox" 
-                                                 onchange="handleConfigChange('isSinglePresentationMode', this.checked)" 
-                                                 ${state.config.isSinglePresentationMode ? 'checked' : ''} 
-                                                 ${state.config.brand === 'DRK' ? 'disabled' : ''} 
-                                                 class="rounded text-orange-600 focus:ring-orange-500">
+                                                    onchange="handleConfigChange('isSinglePresentationMode', this.checked)" 
+                                                    ${state.config.isSinglePresentationMode || state.config.tariff === 'GAS-RL' ? 'checked' : ''} 
+                                                    ${state.config.brand === 'DRK' || state.config.tariff === 'GAS-RL' ? 'disabled' : ''} 
+                                                    class="rounded text-orange-600 focus:ring-orange-500">
                     <span>Oferta Única</span>
                 </label>
             </div>
