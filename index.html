@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -343,8 +342,8 @@
         function getTariffPeriods(model) {
             const m = model ? model.toUpperCase().trim() : '';
             if (m.includes('RL')) {
-                 // GAS RLx: 1 Periodo Potencia (Término Fijo Anual), 1 Periodo Energía (Consumo Total)
-                 return { p: 1, e: 1 };
+                // GAS RLx: 1 Periodo Potencia (Término Fijo Anual), 1 Periodo Energía (Consumo Total)
+                return { p: 1, e: 1 };
             }
             const isHV = m.includes('3.0TD') || m.includes('6.1TD');
             return {
@@ -474,14 +473,17 @@
 
         function handleConfigChange(n, v) { 
             // Permite modificar los días manualmente SOLO si NO es 2.0TD
-            if (n === 'days') v = parseNumericInput(v); 
+            if (n === 'days') v = parseNumericInput(v);
             if (n === 'isSinglePresentationMode') v = (v === 'true' || v === true);
             
-            // Si la tarifa es 2.0TD y el campo de días está deshabilitado, se mantiene el valor original.
+            // CORRECCIÓN: Se elimina el bloqueo para permitir la modificación manual de días en 2.0TD.
+            // La lógica previa impedía modificar los días manualmente para la tarifa 2.0TD.
+            /*
             if (state.config.tariff === '2.0TD' && n === 'days') {
-                setState({ config: state.config }); 
-                return; 
+                setState({ config: state.config });
+                return;
             }
+            */
             
             setState({ config: { ...state.config, [n]: v }, result: null }); 
         }
@@ -878,24 +880,24 @@
             let cP = 0, cE = 0;
 
             if (t.model.toUpperCase().includes('RL')) {
-                 // ** CÁLCULO ESPECÍFICO PARA GAS RLx **
-                 // La lógica de cálculo ya es la solicitada por el usuario (usa la Tarifa Anual del Excel)
-                 const days = state.config.days;
-                 const consumption = inp.p1_kwh || 0;
+                // ** CÁLCULO ESPECÍFICO PARA GAS RLx **
+                // La lógica de cálculo ya es la solicitada por el usuario (usa la Tarifa Anual del Excel)
+                const days = state.config.days;
+                const consumption = inp.p1_kwh || 0;
 
-                 // Termino Fijo Anual (€/año) -> t.pow_an[0] (R:17)
-                 const fixedPriceAnnual = t.pow_an[0] || 0;
-                 const energyPrice = t.en[0] || 0; // Termino de Energía (€/kWh) -> t.en[0] (K:10)
+                // Termino Fijo Anual (€/año) -> t.pow_an[0] (R:17)
+                const fixedPriceAnnual = t.pow_an[0] || 0;
+                const energyPrice = t.en[0] || 0; // Termino de Energía (€/kWh) -> t.en[0] (K:10)
 
-                 // 1. CÁLCULO TÉRMINO FIJO: (T.Fijo Anual / 365) * Días
-                 const fixedPriceDaily = fixedPriceAnnual / 365;
-                 cP = fixedPriceDaily * days;
+                // 1. CÁLCULO TÉRMINO FIJO: (T.Fijo Anual / 365) * Días
+                const fixedPriceDaily = fixedPriceAnnual / 365;
+                cP = fixedPriceDaily * days;
 
-                 // 2. CÁLCULO TÉRMINO DE ENERGÍA (Consumo)
-                 cE = consumption * energyPrice * (1 - (t.en_discount || 0));
+                // 2. CÁLCULO TÉRMINO DE ENERGÍA (Consumo)
+                cE = consumption * energyPrice * (1 - (t.en_discount || 0));
 
             } else {
-                 // ** CÁLCULO PARA ELECTRICIDAD (TD/HV) **
+                // ** CÁLCULO PARA ELECTRICIDAD (TD/HV) **
                 for(let i=0; i<pPeriods; i++) {
                     const kw = inp[`p${i+1}_kw`];
                     const annualPrice = t.pow_an[i]||0; 
@@ -917,32 +919,29 @@
             const m = tariffModel.toUpperCase();
 
             if (m.includes('RL')) {
-                 // ** IMPUESTOS PARA GAS RLx **
-                 // b: Base Imponible, que ya incluye el Impuesto HC en el Gas.
-                 // Impuesto HC = Consumo * 0.00234
-                 const consumption = state.inputs.p1_kwh || 0;
-                 ie = consumption * IMPUESTO_HC_RATE; // En este contexto, 'ie' representa el Impuesto HC para el reporte
-                 
-                 // La base imponible para el IVA debe ser la suma de (T.Fijo + T.Energía + Impuesto HC)
-                 // Como 'b' en este punto ya es (T.Fijo + T.Energía + Impuesto HC),
-                 // usamos 'b' para calcular el IVA.
-                 
+                // ** IMPUESTOS PARA GAS RLx **
+                // b: Base Imponible, que ya incluye el Impuesto HC en el Gas.
+                // Impuesto HC = Consumo * 0.00234
+                const consumption = state.inputs.p1_kwh || 0;
+                ie = consumption * IMPUESTO_HC_RATE; // En este contexto, 'ie' representa el Impuesto HC para el reporte
+                
+                // La base imponible para el IVA debe ser la suma de (T.Fijo + T.Energía + Impuesto HC)
+                // Como 'b' en este punto ya es (T.Fijo + T.Energía), la Base Imponible Real es (b + ie)
+                
             } else {
-                 // ** IMPUESTOS PARA ELECTRICIDAD **
-                 // Impuesto Eléctrico (5% sobre Potencia + Energía Base)
-                 ie = (b) * 0.05;
+                // ** IMPUESTOS PARA ELECTRICIDAD **
+                // Impuesto Eléctrico (5% sobre Potencia + Energía Base)
+                ie = (b) * 0.05;
             }
 
-            // Cálculo del IVA (21% sobre Base Imponible + Impuesto Eléctrico / Impuesto HC)
-            const baseForIVA = b + (m.includes('RL') ? 0 : ie); // Si es GAS, el Impuesto HC (ie) ya está incluido en 'b'
-
-            const iva = baseForIVA * IVA_RATE;
-            
             // Base Imponible Real (antes de IVA, después de IE/Imp.HC)
-            const realBaseImponible = b + (m.includes('RL') ? 0 : ie);
+            const realBaseImponible = b + (m.includes('RL') ? ie : ie);
+
+            // Cálculo del IVA (21% sobre Base Imponible + Impuesto Eléctrico / Impuesto HC)
+            const iva = realBaseImponible * IVA_RATE;
             
             return { 
-                ie: roundInternal(m.includes('RL') ? ie : ie), 
+                ie: roundInternal(ie), 
                 base_imponible: roundInternal(realBaseImponible), // Base Imponible para el reporte
                 iva: roundInternal(iva), 
                 total_periodo: roundInternal(realBaseImponible + iva),
@@ -959,15 +958,15 @@
             const tariffModel = state.config.tariff;
 
             if (tariffModel === 'GAS-RL' && (!state.inputs.p1_kwh || state.inputs.p1_kwh <= 0)) {
-                 return showNotification("Falta Consumo de Gas (kWh/Sm3)", 'error');
+                return showNotification("Falta Consumo de Gas (kWh/Sm3)", 'error');
             }
             if (!tariffModel.includes('GAS') && state.inputs.clientTotalInvoice <= 0) {
-                 return showNotification("Falta Total Factura (Electricidad)", 'error');
+                return showNotification("Falta Total Factura (Electricidad)", 'error');
             }
 
 
             if(state.config.isMultiCupsMode && (!state.inputs.cups || !state.inputs.clientName)) {
-                 return showNotification("En modo Multi-CUPS, se requiere Nombre Cliente y CUPS para el estudio.", 'error');
+                return showNotification("En modo Multi-CUPS, se requiere Nombre Cliente y CUPS para el estudio.", 'error');
             }
 
             const annF = days===31 ? 12 : (365/days);
@@ -1115,7 +1114,7 @@
                 priceDetails += `Impuesto HC (Constante): ${formatCurrency(IMPUESTO_HC_RATE, 8)} €/kWh\n`;
 
             } else {
-                 // Para Electricidad
+                // Para Electricidad
                 for (let i = 0; i < pPeriodsCount; i++) {
                     priceDetails += `P${i+1} (Potencia - €/kW/día): ${formatCurrency(prices.pp[i], 8)}\n`;
                 }
@@ -1301,18 +1300,18 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
 
             // DETALLE POTENCIA / TERMINO FIJO
             if (isGas) {
-                 // GAS: TÉRMINO FIJO ANUAL
-                 const fixedPriceAnnual = plan.tariffDetails.pow_an[0] || 0;
-                 const fixedPriceDaily = prices.pp[0] || 0;
-                 const cost = fixedPriceDaily * days;
+                // GAS: TÉRMINO FIJO ANUAL
+                const fixedPriceAnnual = plan.tariffDetails.pow_an[0] || 0;
+                const fixedPriceDaily = prices.pp[0] || 0;
+                const cost = fixedPriceDaily * days;
 
-                 simData.power.push({
-                     name: `TÉRMINO FIJO (RL)`,
-                     formula: `${formatCurrency(fixedPriceAnnual, 3)} €/año x ${days} días / 365 días`,
-                     cost: cost,
-                 });
+                simData.power.push({
+                    name: `TÉRMINO FIJO (RL)`,
+                    formula: `${formatCurrency(fixedPriceAnnual, 3)} €/año x ${days} días / 365 días`,
+                    cost: cost,
+                });
             } else {
-                 // ELECTRICIDAD
+                // ELECTRICIDAD
                 for (let i = 0; i < pPeriods; i++) {
                     const kw = inputs[`p${i+1}_kw`] || 0;
                     const dailyPrice = prices.pp[i] || 0; 
@@ -1327,19 +1326,19 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
 
             // DETALLE ENERGÍA / CONSUMO
             if (isGas) {
-                 // GAS: TÉRMINO ENERGÍA (Consumo Total)
-                 const kwh = inputs.p1_kwh || 0; // Consumo total
-                 const kwhPrice = prices.pe[0] || 0; 
-                 const cost = kwh * kwhPrice;
-                 
-                 simData.energy.push({
-                     name: `CONSUMO TOTAL`,
-                     formula: `${formatCurrency(kwh, 0)} kWh/Sm3 x ${formatCurrency(kwhPrice, 8)} €/kWh`,
-                     cost: cost,
-                 });
+                // GAS: TÉRMINO ENERGÍA (Consumo Total)
+                const kwh = inputs.p1_kwh || 0; // Consumo total
+                const kwhPrice = prices.pe[0] || 0; 
+                const cost = kwh * kwhPrice;
+                
+                simData.energy.push({
+                    name: `CONSUMO TOTAL`,
+                    formula: `${formatCurrency(kwh, 0)} kWh/Sm3 x ${formatCurrency(kwhPrice, 8)} €/kWh`,
+                    cost: cost,
+                });
 
             } else {
-                 // ELECTRICIDAD
+                // ELECTRICIDAD
                 for (let i = 0; i < ePeriods; i++) {
                     const kwh = inputs[`p${i+1}_kwh`] || 0;
                     const kwhPrice = prices.pe[i] || 0; 
@@ -1416,7 +1415,7 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                     pe.push( t.tariffDetails.en[0]*(1-t.tariffDetails.en_discount) );
                 } else {
                     for(let i=0; i<pPeriodsCount; i++) pp.push( (t.tariffDetails.pow_an[i]*(1-t.tariffDetails.pow_discount))/365 );
-                    for(let i=0; i<ePeriodsCount; i++) pe.push( t.tariffDetails.en[i]*(1-t.tariffDetails.en_discount) );
+                    for(let i=0; i<ePeriodsCount; i++) pe.push( t.en[i]*(1-t.tariffDetails.en_discount) );
                 }
                 return { pp, pe };
             };
@@ -1428,8 +1427,8 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
             
             // FILAS DE POTENCIA / TÉRMINO FIJO
             if (isGas) {
-                 compTableHtml += `<tr style="background:#fff"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Término Fijo Diario (€/día)</td>
-                 ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(getPrices(c).pp[0],6)}</td>`).join('')}</tr>`;
+                compTableHtml += `<tr style="background:#fff"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Término Fijo Diario (€/día)</td>
+                ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(getPrices(c).pp[0],6)}</td>`).join('')}</tr>`;
             } else {
                 for(let i=0; i<pPeriodsCount; i++) {
                     compTableHtml += `<tr style="background:${i%2===0?'#fff':cBgLight}"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Potencia P${i+1} (€/kW/día)</td>
@@ -1439,8 +1438,8 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
 
             // FILAS DE ENERGÍA / CONSUMO
             if (isGas) {
-                 compTableHtml += `<tr style="background:#fff;border-top:1px solid #eee"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Término Energía (€/kWh)</td>
-                 ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(getPrices(c).pe[0],6)}</td>`).join('')}</tr>`;
+                compTableHtml += `<tr style="background:#fff;border-top:1px solid #eee"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Término Energía (€/kWh)</td>
+                ${compareCols.map(c => `<td style="padding:6px;text-align:center">${formatCurrency(getPrices(c).pe[0],6)}</td>`).join('')}</tr>`;
             } else {
                 for(let i=0; i<ePeriodsCount; i++) {
                     compTableHtml += `<tr style="background:${i%2===0?'#fff':cBgLight};border-top:1px solid #eee"><td style="padding:6px;font-weight:bold;color:${cPrimary}">Energía E${i+1} (€/kWh)</td>
@@ -2451,19 +2450,24 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
         function renderClientInputs() {
             const currentTariffModel = state.config.tariff;
             const isGas = currentTariffModel === 'GAS-RL';
-            const daysIsDisabled = currentTariffModel === '2.0TD'; // MODIFICACIÓN 1: GAS ya no está bloqueado
+            // CORRECCIÓN: Se elimina el bloqueo explícito para permitir la modificación manual de días en 2.0TD.
+            const daysIsDisabled = false; 
 
+            
             // Para GAS: solo necesitamos el Consumo Total (en p1_kwh)
             const rows = [1,2,3,4,5,6].map(i => {
                 const is20 = currentTariffModel === '2.0TD';
                 
                 // Disabling/Hiding logic for Electricity
-                const pDis = is20 && i > 2; 
                 const eDis = is20 && i > 3; 
                 
                 // Visibility logic for Gas
                 const hideRow = isGas && i > 1; // Solo mostramos la fila P1 para el consumo total de Gas
                 if (hideRow) return '';
+                
+                // ** CAMBIO SOLICITADO: Habilitar P1 y P2 para 2.0TD para entrada manual **
+                // Solo deshabilitar P3-P6 para 2.0TD. P1, P2 están habilitados.
+                const isPowerInputDisabled = is20 && i > 2; 
                 
                 // Custom labels for Gas mode
                 const pLabel = isGas ? 'Término Fijo Anual (€/año)' : 'Potencia (kW)';
@@ -2473,21 +2477,21 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 return `<div class="grid grid-cols-12 gap-2 text-sm mb-1 items-center">
                     <div class="col-span-1 font-bold text-slate-500 text-center bg-slate-100 rounded">${isGas ? 'Consumo' : `P${i}`}</div>
                     
-                    <!-- CAMPO POTENCIA / TÉRMINO FIJO ANUAL (OCULTO PARA GAS - MODIFICACIÓN 2) -->
+                    <!-- CAMPO POTENCIA / TÉRMINO FIJO ANUAL (P1 y P2 HABILITADOS para 2.0TD, P3-P6 deshabilitados) -->
                     <div class="col-span-5 ${isGas && i===1 ? 'hidden' : ''}">
-                       <input type="number" step="0.01" 
+                        <input type="number" step="0.01" 
                             oninput="handleInputRaw('p${i}_kw', this.value)" 
                             onblur="handleInputBlur('p${i}_kw', this.value)" 
-                            class="w-full p-1 border rounded outline-none focus:border-orange-500 bg-slate-100" 
+                            class="w-full p-1 border rounded outline-none focus:border-orange-500 ${isPowerInputDisabled ? 'bg-slate-100' : 'bg-white'}" 
                             placeholder="${isGas && i===1 ? 'T.Fijo Anual (R)' : 'kW'}" 
                             value="${state.inputs[`p${i}_kw`]||''}" 
-                            disabled 
+                            ${isPowerInputDisabled ? 'disabled' : ''} 
                             title="${pLabel}">
                     </div>
                     
-                    <!-- CAMPO ENERGÍA / CONSUMO TOTAL (EXPANDIDO PARA GAS - MODIFICACIÓN 2) -->
+                    <!-- CAMPO ENERGÍA / CONSUMO TOTAL (EXPANDIDO PARA GAS) -->
                     <div class="${isGas && i===1 ? 'col-span-11' : 'col-span-6'}">
-                       <input type="number" step="1" 
+                        <input type="number" step="1" 
                             oninput="handleInputRaw('p${i}_kwh', this.value)" 
                             onblur="handleInputBlur('p${i}_kwh', this.value)" 
                             class="w-full p-1 border rounded outline-none focus:border-orange-500 ${isGas && i===1 ? 'bg-orange-50' : (eDis?'bg-slate-50':'')}" 
@@ -2525,14 +2529,14 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                 <div class="mb-4">${qrScannerButton}</div> 
 
                 <div class="mb-4">
-                   <label class="text-xs font-bold text-slate-500">Días Facturados (Bloqueado: ${daysIsDisabled ? 'Sí' : 'No'})</label>
+                    <label class="text-xs font-bold text-slate-500">Días Facturados</label>
                    <input type="number" 
                             id="days-input-local"
                             value="${state.config.days}"
                             onblur="handleConfigChange('days', this.value)"
-                            class="w-full p-2 text-lg font-bold border rounded focus:border-orange-500 ${daysIsDisabled ? 'bg-slate-100' : ''}" 
+                            class="w-full p-2 text-lg font-bold border rounded focus:border-orange-500 bg-white" 
                             placeholder="30"
-                            ${daysIsDisabled ? 'disabled' : ''}>
+                            >
                 </div>
                 
                 <div class="mb-4"><label class="text-xs font-bold text-slate-500">Total Factura (€)</label><input type="number" step="0.01" oninput="handleInputRaw('clientTotalInvoice', this.value)" onblur="handleInputBlur('clientTotalInvoice', this.value)" class="w-full p-2 text-lg font-bold border rounded focus:border-orange-500" placeholder="0.00" value="${state.inputs.clientTotalInvoice||''}"></div>
@@ -2541,9 +2545,9 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
 
                 <div class="grid grid-cols-12 gap-2 text-xs font-bold text-slate-400 mb-1 text-center">
                     <div class="col-span-1"></div>
-                    <!-- MODIFICACIÓN 2: Ocultar Término Fijo para GAS -->
+                    <!-- MODIFICACIÓN: Ocultar Término Fijo para GAS (queda implícitamente fuera de col-span-5) -->
                     <div class="col-span-5 ${isGas ? 'hidden' : ''}">${isGas ? 'Término Fijo' : 'Potencia'}</div>
-                    <!-- MODIFICACIÓN 2: Expandir Consumo para GAS -->
+                    <!-- MODIFICACIÓN: Expandir Consumo para GAS -->
                     <div class="${isGas ? 'col-span-11' : 'col-span-6'}">${isGas ? 'Consumo' : 'Energía'}</div>
                 </div>
                 ${rows}
@@ -2671,14 +2675,13 @@ Para formalizar el contrato, por favor, responde a este email adjuntando por cad
                     <option value="2.0TD" ${state.config.tariff === '2.0TD' ? 'selected' : ''}>2.0TD</option>
                     <option value="6.1TD" ${state.config.tariff === '6.1TD' ? 'selected' : ''}>6.1TD</option>
                 </select>
-                <!-- Días de facturación: Se elimina el bloqueo de GAS-RL para que sea manual -->
+                <!-- CORRECCIÓN: Se habilita el campo de días para la tarifa 2.0TD según solicitud. -->
                 <input type="number" 
                     id="days-input" 
                     value="${state.config.days}" 
                     onblur="handleConfigChange('days',this.value)" 
                     class="w-12 text-center border rounded p-1 font-bold text-sm text-slate-600 shadow-sm" 
                     title="Días Factura"
-                    ${state.config.tariff === '2.0TD' ? 'disabled' : ''}
                     >
 
                 <label class="flex items-center space-x-2 text-xs font-medium text-slate-700 ${state.config.brand === 'DRK' || state.config.tariff === 'GAS-RL' ? 'opacity-50' : ''}">
